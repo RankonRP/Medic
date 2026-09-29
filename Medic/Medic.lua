@@ -917,6 +917,8 @@ end
 function M.ApplyGrid()
     if not header or InCombatLockdown() then return false end
     local per, sp = MedicDB.perRow or 5, MedicDB.spacing or 2
+    -- staré ukotvení pryč, jinak se k němu přidá nové a rámečky „ujedou“ šikmo
+    for _, btn in ipairs(buttons) do btn:ClearAllPoints() end
     if MedicDB.orientation == "vertical" then
         header:SetAttribute("xOffset", 0)
         header:SetAttribute("yOffset", -sp)
