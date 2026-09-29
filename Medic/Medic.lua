@@ -204,11 +204,55 @@ local function effectiveBinds()
 end
 
 -- Atributy bezpečného tlačítka pro jedno přiřazení
+-- Vestavěné akce hry „target“ a „togglemenu“ ve WoW Forever u rámečků addonů nefungují
+-- (klik projde, ale nic se nestane) -> označení přes makro /target na hráče pod myší,
+-- nabídku otevírá addon sám po kliknutí (openUnitMenu v PostClick). Kouzla fungují normálně.
+local TARGET_MACRO = "/target [@mouseover,exists]"
 local function bindAttributes(key, action)
     local mod, btn = key:match("^(.-)(%d)$")
-    if action == "target" then return { [mod .. "type" .. btn] = "target" } end
-    if action == "menu" then return { [mod .. "type" .. btn] = "togglemenu" } end
+    if action == "target" then return { [mod .. "type" .. btn] = "macro", [mod .. "macrotext" .. btn] = TARGET_MACRO } end
+    if action == "menu" then return {} end
     return { [mod .. "type" .. btn] = "spell", [mod .. "spell" .. btn] = action }
+end
+
+-------------------------------------------------------------------------------
+-- Nabídka hráče (jako pravý klik na portrét)
+-------------------------------------------------------------------------------
+local MOUSE_NAMES = { LeftButton = "1", RightButton = "2", MiddleButton = "3", Button4 = "4", Button5 = "5" }
+
+-- Jaká akce patří ke kliknutí (tlačítko + právě držené modifikátory, nebo klávesa MK1…)
+function M.ClickAction(button)
+    local mk = button and button:match("^MK(%d+)$")
+    if mk then
+        local list = {}
+        for key, action in pairs(MedicDB.classKeys[playerClass] or {}) do
+            if action then list[#list + 1] = { key = key, action = action } end
+        end
+        table.sort(list, function(a, b) return a.key < b.key end)
+        local kv = list[tonumber(mk)]
+        return kv and kv.action
+    end
+    local num = MOUSE_NAMES[button] or button
+    local key = (IsAltKeyDown() and "alt-" or "") .. (IsControlKeyDown() and "ctrl-" or "") .. (IsShiftKeyDown() and "shift-" or "") .. tostring(num)
+    return M.GetBinds()[key]
+end
+
+local menuFrame
+function M.OpenUnitMenu(owner, unit)
+    local which = UnitIsUnit(unit, "player") and "SELF" or (UnitInRaid(unit) and "RAID_PLAYER") or (UnitInParty(unit) and "PARTY") or "PLAYER"
+    local name, server = UnitName(unit)
+    -- nový systém nabídek (moderní klient)
+    if UnitPopup_OpenMenu then
+        local ok = pcall(UnitPopup_OpenMenu, which, { unit = unit, name = name, server = server })
+        if ok then return end
+    end
+    -- starší rozbalovací nabídka
+    if UnitPopup_ShowMenu and ToggleDropDownMenu then
+        if not menuFrame then menuFrame = CreateFrame("Frame", "MedicUnitMenu", UIParent, "UIDropDownMenuTemplate") end
+        menuFrame.unit, menuFrame.name, menuFrame.server = unit, name, server
+        UIDropDownMenu_Initialize(menuFrame, function(self) UnitPopup_ShowMenu(self, which, unit, name, server) end, "MENU")
+        ToggleDropDownMenu(1, nil, menuFrame, "cursor", 0, 0)
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -414,6 +458,11 @@ local function styleButton(btn, preview)
         GameTooltip:Show()
     end)
     btn:HookScript("OnLeave", function() GameTooltip:Hide() end)
+    -- nabídka hráče: addon ji otevře sám (vestavěná akce ve Forever nefunguje)
+    btn:HookScript("PostClick", function(self, button)
+        local unit = self:GetAttribute("unit")
+        if unit and M.ClickAction(button) == "menu" then M.OpenUnitMenu(self, unit) end
+    end)
     -- ladění: /medic ladit kliky -> po každém kliknutí vypíše, co hra udělala
     btn:HookScript("PostClick", function(self, button)
         if not M.debugClicks then return end
@@ -795,8 +844,8 @@ end
 
 local function keyAttributes(i, action)
     local b = "-MK" .. i
-    if action == "target" then return { ["*type" .. b] = "target" } end
-    if action == "menu" then return { ["*type" .. b] = "togglemenu" } end
+    if action == "target" then return { ["*type" .. b] = "macro", ["*macrotext" .. b] = TARGET_MACRO } end
+    if action == "menu" then return {} end
     return { ["*type" .. b] = "spell", ["*spell" .. b] = action }
 end
 
@@ -834,6 +883,7 @@ local function applyKeys()
         for i = 1, MAX_KEYS do
             btn:SetAttribute("*type-MK" .. i, nil)
             btn:SetAttribute("*spell-MK" .. i, nil)
+            btn:SetAttribute("*macrotext-MK" .. i, nil)
         end
         for i, kv in ipairs(list) do
             for attr, value in pairs(keyAttributes(i, kv.action)) do btn:SetAttribute(attr, value) end
@@ -873,6 +923,7 @@ function M.ApplyBindings()
             for b = 1, 5 do
                 btn:SetAttribute(mod .. "type" .. b, nil)
                 btn:SetAttribute(mod .. "spell" .. b, nil)
+                btn:SetAttribute(mod .. "macrotext" .. b, nil)
             end
         end
         for key, action in pairs(binds) do
