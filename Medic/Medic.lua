@@ -71,7 +71,7 @@ local DEFAULTS = {
     width = 90, height = 38, scale = 1,
     point = { "CENTER", -300, 0 },
     locked = false,
-    binds = {},        -- ruční přiřazení hráče (přebíjí výchozí)
+    classBinds = {},   -- ruční přiřazení hráče podle povolání: classBinds.DRUID["shift-1"] = "Remove Curse"
     showSolo = true,
     buffs = true,
 }
@@ -158,7 +158,7 @@ local function effectiveBinds()
         end
         out[key] = pick
     end
-    for key, action in pairs(MedicDB.binds) do
+    for key, action in pairs(MedicDB.classBinds[playerClass] or {}) do
         if action == false or action == "" then out[key] = nil else out[key] = action end
     end
     return out
@@ -201,11 +201,15 @@ local function styleButton(btn)
     btn.hpBg = hpBg
 
     -- příchozí léčení: světlejší pruh hned za zdravím
-    local heal = hp:CreateTexture(nil, "ARTWORK")
-    heal:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
-    heal:SetVertexColor(0.3, 1, 0.3, 0.55)
+    -- (ukazatel, ne obrázek: hodnota může být tajná, s tou umí jen ukazatel; přesah za rámeček se ořízne)
+    hp:SetClipsChildren(true)
+    local heal = CreateFrame("StatusBar", nil, hp)
+    heal:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    heal:SetStatusBarColor(0.3, 1, 0.3, 0.55)
     heal:SetPoint("TOPLEFT", hp:GetStatusBarTexture(), "TOPRIGHT")
     heal:SetPoint("BOTTOMLEFT", hp:GetStatusBarTexture(), "BOTTOMRIGHT")
+    heal:SetWidth(1)
+    heal:SetFrameLevel(hp:GetFrameLevel() + 1)
     heal:Hide()
     btn.heal = heal
 
@@ -272,13 +276,20 @@ end
 -------------------------------------------------------------------------------
 -- Aktualizace rámečku
 -------------------------------------------------------------------------------
+-- WoW Forever (stejně jako nový retail) vrací zdraví, dosah, aury… jako „tajné hodnoty“:
+-- addon je smí jen předat ukazateli (StatusBar, SetText, SetTexture), ale nesmí s nimi počítat
+-- ani je porovnávat. secret(x) = true -> s hodnotou nic nepočítat.
+local function secret(v) return issecretvalue ~= nil and issecretvalue(v) or false end
+local function flag(v) if secret(v) then return false end return v and true or false end
+
 local function updateRange(btn, unit)
-    local inRange = true
-    if not UnitIsUnit(unit, "player") and UnitInRange then
-        local r, checked = UnitInRange(unit)
-        if checked then inRange = r end
+    if UnitIsUnit(unit, "player") or not UnitInRange then btn:SetAlpha(1) return end
+    local r, checked = UnitInRange(unit)
+    if secret(r) or secret(checked) then
+        if btn.SetAlphaFromBoolean then btn:SetAlphaFromBoolean(r, 1, 0.4) else btn:SetAlpha(1) end
+        return
     end
-    btn:SetAlpha(inRange and 1 or 0.4)
+    btn:SetAlpha((checked and not r) and 0.4 or 1)
 end
 
 function updateButton(btn)
@@ -287,16 +298,18 @@ function updateButton(btn)
     if not unit or not UnitExists(unit) then return end
 
     local _, class = UnitClass(unit)
-    local c = class and RAID_CLASS_COLORS[class] or { r = 0.2, g = 0.8, b = 0.2 }
+    local c = (class and not secret(class) and RAID_CLASS_COLORS[class]) or { r = 0.2, g = 0.8, b = 0.2 }
     btn.nameText:SetText(UnitName(unit) or "")
     btn.nameText:SetTextColor(1, 1, 1)
 
+    -- zdraví: hodnoty rovnou do ukazatele (funguje i s tajnými hodnotami)
     local hp, maxHp = UnitHealth(unit), UnitHealthMax(unit)
-    if maxHp <= 0 then maxHp = 1 end
-    btn.hp:SetValue(hp / maxHp)
+    btn.hp:SetMinMaxValues(0, maxHp)
+    btn.hp:SetValue(hp)
 
-    local dead = UnitIsDeadOrGhost(unit)
-    local offline = not UnitIsConnected(unit)
+    local dead = flag(UnitIsDeadOrGhost(unit))
+    local offline = not flag(UnitIsConnected(unit))
+    btn.infoText:SetText("")
     if offline then
         btn.hp:SetStatusBarColor(0.3, 0.3, 0.3)
         btn.infoText:SetText("Offline")
@@ -307,37 +320,45 @@ function updateButton(btn)
         btn.infoText:SetTextColor(0.8, 0.3, 0.3)
     else
         btn.hp:SetStatusBarColor(c.r, c.g, c.b)
-        local deficit = maxHp - hp
-        if deficit > 0 then
-            btn.infoText:SetText("-" .. (deficit >= 10000 and (math.floor(deficit / 1000) .. "k") or deficit))
-            btn.infoText:SetTextColor(1, 0.4, 0.4)
-        else
-            btn.infoText:SetText("")
+        -- chybějící HP jde spočítat jen u netajných hodnot
+        if not secret(hp) and not secret(maxHp) then
+            local deficit = maxHp - hp
+            if deficit > 0 then
+                btn.infoText:SetText("-" .. (deficit >= 10000 and (math.floor(deficit / 1000) .. "k") or deficit))
+                btn.infoText:SetTextColor(1, 0.4, 0.4)
+            end
         end
     end
 
-    -- příchozí léčení
-    local incoming = (not dead and not offline and UnitGetIncomingHeals) and (UnitGetIncomingHeals(unit) or 0) or 0
-    if incoming > 0 and hp < maxHp then
-        local w = btn.hp:GetWidth() * math.min(incoming, maxHp - hp) / maxHp
-        if w >= 1 then btn.heal:SetWidth(w); btn.heal:Show() else btn.heal:Hide() end
+    -- příchozí léčení: druhý ukazatel navazuje na konec zdraví (bez počítání, přesah se ořízne)
+    local incoming = (not dead and not offline and UnitGetIncomingHeals) and UnitGetIncomingHeals(unit) or nil
+    if incoming ~= nil then
+        btn.heal:SetWidth(math.max(btn.hp:GetWidth(), 1))
+        btn.heal:SetMinMaxValues(0, maxHp)
+        btn.heal:SetValue(incoming)
+        btn.heal:Show()
     else
         btn.heal:Hide()
     end
 
-    -- aggro
+    -- aggro (tajnou hodnotu porovnat nejde -> nezobrazit)
     local threat = UnitThreatSituation and UnitThreatSituation(unit)
-    btn.aggro:SetShown(threat and threat >= 2 or false)
+    btn.aggro:SetShown(not secret(threat) and threat ~= nil and threat >= 2)
 
-    -- debuff, který umím odstranit (filtr RAID = jen odstranitelné mnou)
-    local dispelType, dispelIcon
+    -- debuff, který umím odstranit
+    local found, dispelType, dispelIcon = false, nil, nil
     if not dead then
-        forEachAura(unit, "HARMFUL|RAID", function(_, icon, dtype)
-            if dtype and dtype ~= "" then dispelType, dispelIcon = dtype, icon return true end
-        end)
+        for _, filter in ipairs({ "HARMFUL|RAID_PLAYER_DISPELLABLE", "HARMFUL|RAID" }) do
+            forEachAura(unit, filter, function(_, icon, dtype)
+                found, dispelIcon = true, icon
+                if not secret(dtype) then dispelType = dtype end
+                return true
+            end)
+            if found then break end
+        end
     end
-    if dispelType then
-        local dc = (DebuffTypeColor and DebuffTypeColor[dispelType]) or { r = 0.8, g = 0, b = 0.8 }
+    if found then
+        local dc = (dispelType and DebuffTypeColor and DebuffTypeColor[dispelType]) or { r = 0.8, g = 0, b = 0.8 }
         btn.border:SetBackdropBorderColor(dc.r, dc.g, dc.b, 1)
         btn.border:Show()
         btn.debuffIcon:SetTexture(dispelIcon)
@@ -347,12 +368,13 @@ function updateButton(btn)
         btn.debuffIcon:Hide()
     end
 
-    -- chybějící buff
+    -- chybějící buff (když jsou názvy aur tajné, stav se nemění)
     local cfg = MedicDB.buffs and CLASS_BUFFS[playerClass]
-    local missing = false
+    local missing, unknown = false, false
     if cfg and not dead and not offline and knowsSpell(cfg.spell) then
         missing = true
         forEachAura(unit, "HELPFUL", function(name, _, _, source)
+            if secret(name) or secret(source) then unknown = true return true end
             if not name then return end
             if cfg.mine and source ~= "player" then return end
             for _, want in ipairs(cfg.names) do
@@ -360,7 +382,9 @@ function updateButton(btn)
             end
         end)
     end
-    if missing then
+    if unknown then
+        -- nechat, jak bylo
+    elseif missing then
         btn.buffIcon:SetTexture(spellIcon(cfg.spell) or "Interface\\Icons\\INV_Misc_QuestionMark")
         btn.buffIcon:Show()
     else
@@ -369,7 +393,6 @@ function updateButton(btn)
 
     updateRange(btn, unit)
 end
-
 local function updateAll()
     for _, btn in ipairs(buttons) do
         if btn:IsVisible() then updateButton(btn) end
@@ -421,6 +444,30 @@ function M.ApplyBindings()
     end
     -- přepočítat rozložení hlavičky
     header:SetAttribute("showSolo", MedicDB.showSolo)
+end
+
+-------------------------------------------------------------------------------
+-- Rozhraní pro okno nastavení (Okno.lua)
+-------------------------------------------------------------------------------
+-- action: název kouzla, "target", "menu"; false = nic; nil = výchozí
+function M.SetBind(key, action)
+    MedicDB.classBinds[playerClass] = MedicDB.classBinds[playerClass] or {}
+    MedicDB.classBinds[playerClass][key] = action
+    M.ApplyBindings()
+end
+function M.ResetBinds()
+    MedicDB.classBinds[playerClass] = nil
+    M.ApplyBindings()
+end
+M.GetBinds = function() return effectiveBinds() end
+M.KnowsSpell = knowsSpell
+M.SpellIcon = spellIcon
+M.KeyLabel = keyLabel
+M.Msg = msg
+M.Class = playerClass
+M.IsCustom = function(key)
+    local t = MedicDB.classBinds[playerClass]
+    return t ~= nil and t[key] ~= nil
 end
 
 -------------------------------------------------------------------------------
@@ -512,6 +559,7 @@ local function printBinds()
 end
 
 local HELP = {
+    "/medic - okno s nastavenim kouzel (pretahni kouzlo ze spellbooku)",
     "/medic kouzla - vypise, co je na kterem tlacitku mysi",
     "/medic klik <tlacitko> <kouzlo> - napr. /medic klik shift-1 Cleanse",
     "     tlacitka: 1 leve, 2 prave, 3 prostredni, 4 a 5 bocni; pred cislo shift-, ctrl-, alt-",
@@ -527,6 +575,7 @@ local HELP = {
 local function slash(input)
     local cmd, rest = (input or ""):match("^%s*(%S*)%s*(.-)%s*$")
     cmd = cmd:lower()
+    if cmd == "" and M.OpenOptions then M.OpenOptions() return end
     if cmd == "" or cmd == "help" or cmd == "pomoc" then
         msg("prikazy:")
         for _, l in ipairs(HELP) do print("   " .. l) end
@@ -545,15 +594,14 @@ local function slash(input)
         local key = normalizeKey(keyText)
         if not key or not action then msg("pouziti: /medic klik shift-1 Cleanse") return end
         local low = action:lower()
-        if low == "zadne" or low == "nic" or low == "-" then MedicDB.binds[key] = false
-        elseif low == "vychozi" then MedicDB.binds[key] = nil
-        elseif low == "target" or low == "oznacit" then MedicDB.binds[key] = "target"
-        elseif low == "menu" or low == "nabidka" then MedicDB.binds[key] = "menu"
+        if low == "zadne" or low == "nic" or low == "-" then M.SetBind(key, false)
+        elseif low == "vychozi" then M.SetBind(key, nil)
+        elseif low == "target" or low == "oznacit" then M.SetBind(key, "target")
+        elseif low == "menu" or low == "nabidka" then M.SetBind(key, "menu")
         else
-            MedicDB.binds[key] = action
+            M.SetBind(key, action)
             if not knowsSpell(action) then msg("pozor: kouzlo '" .. action .. "' zatim neumis nebo je napsane jinak (nazev anglicky, jako ve spellbooku).") end
         end
-        M.ApplyBindings()
         printBinds()
     elseif cmd == "zamknout" then
         MedicDB.locked = true; updateLock(); msg("zamceno.")
@@ -612,6 +660,11 @@ ev:SetScript("OnEvent", function(_, event, arg1)
         MedicDB = MedicDB or {}
         for k, v in pairs(DEFAULTS) do
             if MedicDB[k] == nil then MedicDB[k] = type(v) == "table" and CopyTable(v) or v end
+        end
+        -- 0.1.0 ukládala kouzla společně pro všechna povolání -> patří povolání, které je nastavilo
+        if MedicDB.binds then
+            if next(MedicDB.binds) and not MedicDB.classBinds[playerClass] then MedicDB.classBinds[playerClass] = MedicDB.binds end
+            MedicDB.binds = nil
         end
         return
     end
