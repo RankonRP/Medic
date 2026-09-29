@@ -1264,6 +1264,20 @@ local function slash(input)
         return
     end
     if cmd == "kouzla" or cmd == "seznam" then printBinds() return end
+    if cmd == "ladit" then
+        -- co má rámeček pod myší opravdu nastavené (pro hledání chyb)
+        local found
+        for _, btn in ipairs(buttons) do if btn:IsVisible() and btn:IsMouseOver() then found = btn break end end
+        if not found then msg("najed mysi na ramecek hrace a napis /medic ladit znovu.") return end
+        msg("ramecek: " .. tostring(found:GetAttribute("unit")) .. (InCombatLockdown() and " (v boji)" or "") .. (pendingApply and " - ceka na zmeny po boji" or ""))
+        for _, mod in ipairs(MODS) do
+            for b = 1, 5 do
+                local ty = found:GetAttribute(mod .. "type" .. b)
+                if ty then print(("   %s%d: %s %s"):format(mod, b, ty, found:GetAttribute(mod .. "spell" .. b) or "")) end
+            end
+        end
+        return
+    end
     if cmd == "test" or cmd == "nahled" then
         local n = tonumber(rest) or (M.PreviewCount() > 0 and 0 or 40)
         if n > 0 and InCombatLockdown() then msg("v boji to nejde.") return end
