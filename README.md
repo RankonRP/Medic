@@ -8,6 +8,8 @@ Rámečky skupiny a raidu pro WoW: Forever s léčením na kliknutí myši (podo
 - příchozí léčení, aggro, dosah
 - řazení podle role (tank vlevo, healer, dps), ikony rolí
 - ikonky tvých HoTů s odpočtem, barva podle zdraví, blikání při debuffu
+- zvýraznění cíle, pruh many, štíty (absorpce), oživování, lebka u hráče, na kterého útočí tvůj cíl
+- rozložení vedle sebe / pod sebou, počet v řadě, mezery
 - hlídání chybějícího buffu (Blessing, Fortitude, Arcane Intellect, Mark of the Wild)
 
 Ve hře napiš `/medic` pro seznam příkazů.

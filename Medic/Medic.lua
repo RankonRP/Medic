@@ -93,6 +93,16 @@ local DEFAULTS = {
     hotSize = 15,        -- velikost ikonek HoTů
     buffSize = 12,       -- velikost ikonky chybějícího buffu
     debuffSize = 14,     -- velikost ikonky debuffu
+    targetHighlight = true, -- bílý rámeček kolem hráče, kterého mám v cíli
+    powerBar = true,     -- pruh many dole
+    powerHealersOnly = false, -- pruh many jen u healerů
+    powerHeight = 4,
+    absorbs = true,      -- štíty (absorpce) jako světlý pruh za zdravím
+    rezIcon = true,      -- ikonka, když mrtvého někdo oživuje
+    targetOf = true,     -- lebka u hráče, na kterého útočí můj nepřátelský cíl
+    orientation = "horizontal", -- "horizontal" = vedle sebe, "vertical" = pod sebou
+    perRow = 5,          -- hráčů v jedné řadě / sloupci
+    spacing = 2,         -- mezera mezi rámečky
 }
 
 -- HoTy a štíty, které se ukazují v rámečku (když hra názvy aur neskrývá; jinak všechny krátké moje buffy)
@@ -240,7 +250,29 @@ local function styleButton(btn)
     heal:SetPoint("BOTTOMLEFT", hp:GetStatusBarTexture(), "BOTTOMRIGHT")
     heal:SetWidth(1)
     heal:SetFrameLevel(hp:GetFrameLevel() + 1)
-    heal:Hide()
+    heal:SetMinMaxValues(0, 1)
+    heal:SetValue(0)
+
+    -- štíty (absorpce): navazuje na konec příchozího léčení
+    local absorb = CreateFrame("StatusBar", nil, hp)
+    absorb:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    absorb:SetStatusBarColor(0.85, 0.95, 1, 0.6)
+    absorb:SetPoint("TOPLEFT", heal:GetStatusBarTexture(), "TOPRIGHT")
+    absorb:SetPoint("BOTTOMLEFT", heal:GetStatusBarTexture(), "BOTTOMRIGHT")
+    absorb:SetWidth(1)
+    absorb:SetFrameLevel(hp:GetFrameLevel() + 1)
+    absorb:Hide()
+    btn.absorb = absorb
+
+    -- pruh many dole
+    local power = CreateFrame("StatusBar", nil, btn)
+    power:SetPoint("BOTTOMLEFT", 2, 2)
+    power:SetPoint("BOTTOMRIGHT", -2, 2)
+    power:SetHeight(4)
+    power:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    power:SetStatusBarColor(0.15, 0.45, 1)
+    power:Hide()
+    btn.power = power
     btn.heal = heal
 
     local overlay = CreateFrame("Frame", nil, btn)
@@ -285,6 +317,32 @@ local function styleButton(btn)
     aggroBorder:SetBackdropBorderColor(1, 0.1, 0.1, 1)
     aggroBorder:Hide()
     btn.aggroBorder = aggroBorder
+
+    -- cíl: bílý rámeček
+    local targetBorder = CreateFrame("Frame", nil, btn, "BackdropTemplate")
+    targetBorder:SetPoint("TOPLEFT", -1, 1)
+    targetBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+    targetBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
+    targetBorder:SetBackdropBorderColor(1, 1, 1, 0.9)
+    targetBorder:SetFrameLevel(btn:GetFrameLevel() + 6)
+    targetBorder:Hide()
+    btn.targetBorder = targetBorder
+
+    -- oživování: ikonka uprostřed
+    local rez = overlay:CreateTexture(nil, "OVERLAY")
+    rez:SetSize(18, 18)
+    rez:SetPoint("CENTER", 0, 0)
+    rez:SetTexture("Interface\\RaidFrame\\Raid-Icon-Rez")
+    rez:Hide()
+    btn.rezIcon = rez
+
+    -- na koho útočí můj cíl: lebka nahoře uprostřed
+    local skull = overlay:CreateTexture(nil, "OVERLAY")
+    skull:SetSize(14, 14)
+    skull:SetPoint("TOP", 0, 3)
+    skull:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcon_8")
+    skull:Hide()
+    btn.targetOfIcon = skull
 
     -- debuff, který umíš odstranit: barevný rámeček (barva podle typu – magie, jed, nemoc, kletba)
     local border = CreateFrame("Frame", nil, btn, "BackdropTemplate")
@@ -429,7 +487,29 @@ local function setHealthColor(btn, unit, hp, maxHp, classColor)
     if not ok then btn.hp:SetStatusBarColor(classColor.r, classColor.g, classColor.b) end
 end
 
--- Ikonky mých HoTů s odpočtem (velikost z nastavení; nejsou chráněné, jde měnit i v boji)
+-- Pruh many (jen jednotky s manou; volitelně jen healeři). Zdraví se podle něj zkrátí.
+function M.UpdatePower(btn, unit)
+    local show = MedicDB.powerBar
+    if show then
+        local pt = UnitPowerType(unit)
+        show = not secret(pt) and pt == 0
+        if show and MedicDB.powerHealersOnly then
+            local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(unit)
+            show = not secret(role) and role == "HEALER"
+        end
+    end
+    local h = MedicDB.powerHeight or 4
+    if show then
+        btn.power:SetHeight(h)
+        btn.power:SetMinMaxValues(0, UnitPowerMax(unit, 0))
+        btn.power:SetValue(UnitPower(unit, 0))
+        btn.power:Show()
+    else
+        btn.power:Hide()
+    end
+    btn.hp:SetPoint("BOTTOMRIGHT", -2, show and (3 + h) or 2)
+end
+
 function M.LayoutHots(btn)
     if btn.buffIcon then btn.buffIcon:SetSize(MedicDB.buffSize or 12, MedicDB.buffSize or 12) end
     if btn.debuffIcon then btn.debuffIcon:SetSize(MedicDB.debuffSize or 14, MedicDB.debuffSize or 14) end
@@ -548,14 +628,40 @@ function updateButton(btn)
 
     -- příchozí léčení: druhý ukazatel navazuje na konec zdraví (bez počítání, přesah se ořízne)
     local incoming = (not dead and not offline and UnitGetIncomingHeals) and UnitGetIncomingHeals(unit) or nil
-    if incoming ~= nil then
-        btn.heal:SetWidth(math.max(btn.hp:GetWidth(), 1))
-        btn.heal:SetMinMaxValues(0, maxHp)
-        btn.heal:SetValue(incoming)
-        btn.heal:Show()
+    btn.heal:SetWidth(math.max(btn.hp:GetWidth(), 1))
+    btn.heal:SetMinMaxValues(0, maxHp)
+    btn.heal:SetValue(incoming or 0)
+    btn.heal:Show()
+
+    -- štíty
+    local absorbs = (MedicDB.absorbs and not dead and not offline and UnitGetTotalAbsorbs) and UnitGetTotalAbsorbs(unit) or nil
+    if absorbs ~= nil then
+        btn.absorb:SetWidth(math.max(btn.hp:GetWidth(), 1))
+        btn.absorb:SetMinMaxValues(0, maxHp)
+        btn.absorb:SetValue(absorbs)
+        btn.absorb:Show()
     else
-        btn.heal:Hide()
+        btn.absorb:Hide()
     end
+
+    -- cíl
+    btn.targetBorder:SetShown(MedicDB.targetHighlight and flag(UnitIsUnit(unit, "target")))
+    -- na koho útočí můj nepřátelský cíl
+    local targeted = MedicDB.targetOf and UnitExists("target") and flag(UnitCanAttack("player", "target"))
+        and flag(UnitIsUnit(unit, "targettarget"))
+    btn.targetOfIcon:SetShown(targeted and true or false)
+
+    -- mrtvý / oživování
+    if dead then
+        btn.hpBg:SetColorTexture(0.25, 0.05, 0.05, 1)
+        btn.nameText:SetTextColor(0.6, 0.6, 0.6)
+        if flag(UnitIsGhost(unit)) then btn.infoText:SetText("Duch") end
+    else
+        btn.hpBg:SetColorTexture(0.15, 0.15, 0.15, 1)
+    end
+    btn.rezIcon:SetShown(MedicDB.rezIcon and dead and UnitHasIncomingResurrection ~= nil and flag(UnitHasIncomingResurrection(unit)))
+
+    M.UpdatePower(btn, unit)
 
     -- aggro (tajnou hodnotu porovnat nejde -> nezobrazit)
     local threat = UnitThreatSituation and UnitThreatSituation(unit)
@@ -807,6 +913,27 @@ function M.ApplySort()
     return true
 end
 
+-- rozložení: vedle sebe / pod sebou, počet v řadě, mezery (jen mimo boj)
+function M.ApplyGrid()
+    if not header or InCombatLockdown() then return false end
+    local per, sp = MedicDB.perRow or 5, MedicDB.spacing or 2
+    if MedicDB.orientation == "vertical" then
+        header:SetAttribute("xOffset", 0)
+        header:SetAttribute("yOffset", -sp)
+        header:SetAttribute("columnAnchorPoint", "LEFT")
+        header:SetAttribute("point", "TOP")
+    else
+        header:SetAttribute("xOffset", sp)
+        header:SetAttribute("yOffset", 0)
+        header:SetAttribute("columnAnchorPoint", "TOP")
+        header:SetAttribute("point", "LEFT")
+    end
+    header:SetAttribute("columnSpacing", sp)
+    header:SetAttribute("maxColumns", math.ceil(40 / per))
+    header:SetAttribute("unitsPerColumn", per)
+    return true
+end
+
 -- velikost a měřítko rámečků (jen mimo boj); vrací false, když to hra teď nedovolí
 function M.SetLayout(w, h, s)
     if InCombatLockdown() then return false end
@@ -874,13 +1001,7 @@ local function createFrames()
     header:SetAttribute("showRaid", true)
     header:SetAttribute("showSolo", MedicDB.showSolo)
     M.ApplySort()
-    -- rámečky vedle sebe (zleva doprava), další řada pod nimi
-    header:SetAttribute("point", "LEFT")
-    header:SetAttribute("xOffset", 2)
-    header:SetAttribute("maxColumns", 8)
-    header:SetAttribute("unitsPerColumn", 5)
-    header:SetAttribute("columnSpacing", 2)
-    header:SetAttribute("columnAnchorPoint", "TOP")
+    M.ApplyGrid()
     header:SetAttribute("initialConfigFunction", buildSnippet(effectiveBinds()))
     header:Show()
 
@@ -1024,7 +1145,9 @@ ev:SetScript("OnEvent", function(_, event, arg1)
         for _, e in ipairs({ "UNIT_HEALTH", "UNIT_HEALTH_FREQUENT", "UNIT_MAXHEALTH", "UNIT_HEAL_PREDICTION",
                             "UNIT_AURA", "UNIT_THREAT_SITUATION_UPDATE", "UNIT_CONNECTION", "UNIT_NAME_UPDATE",
                             "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
-                            "SPELLS_CHANGED", "UNIT_FLAGS", "PLAYER_REGEN_DISABLED" }) do
+                            "SPELLS_CHANGED", "UNIT_FLAGS", "PLAYER_REGEN_DISABLED", "PLAYER_TARGET_CHANGED",
+                            "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
+                            "UNIT_ABSORB_AMOUNT_CHANGED", "INCOMING_RESURRECT_CHANGED", "UNIT_TARGET" }) do
             reg(e)
         end
         C_Timer.After(1, updateAll)
@@ -1033,13 +1156,25 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     end
     if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" then
         if event == "PLAYER_REGEN_ENABLED" and pendingApply then M.ApplyBindings() end
-        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort(); M.WrapPending() end
+        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort(); M.ApplyGrid(); M.WrapPending() end
         updateAll()   -- buff „jen mimo boj“
         return
     end
     if event == "SPELLS_CHANGED" then
         -- nové kouzlo (nová úroveň) -> výchozí přiřazení může použít lepší kouzlo
         M.ApplyBindings()
+        return
+    end
+    if event == "PLAYER_TARGET_CHANGED" then updateAll() return end
+    if event == "UNIT_TARGET" then
+        if arg1 == "target" then updateAll() end   -- můj cíl přepnul na jiného hráče
+        return
+    end
+    if event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
+        for _, btn in ipairs(buttons) do
+            local u = btn:GetAttribute("unit")
+            if u and btn:IsVisible() and (u == arg1 or UnitIsUnit(u, arg1)) then M.UpdatePower(btn, u) end
+        end
         return
     end
     if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" then

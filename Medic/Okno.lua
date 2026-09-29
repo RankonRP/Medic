@@ -64,7 +64,7 @@ local BACKDROP = {
 }
 
 local win, cells, chooser, typer = nil, {}, nil, nil
-local createIndicatorsPage, createKeysPage, refreshKeys
+local createIndicatorsPage, createKeysPage, createLookPage, refreshKeys
 
 local function text(parent, font, r, g, b)
     local fs = parent:CreateFontString(nil, "OVERLAY")
@@ -401,7 +401,8 @@ end
 -------------------------------------------------------------------------------
 -- Záložka „Ukazatele a velikost“: buffy, debuffy, aggro, velikost rámečků
 -------------------------------------------------------------------------------
-createIndicatorsPage = function(page)
+-- Pomůcky pro stránky s volbami (nadpis, poznámka, zaškrtávátko, − hodnota +)
+local function pageHelpers(page)
     local refreshers = {}
     page.refresh = function() for _, fn in ipairs(refreshers) do fn() end end
 
@@ -410,12 +411,13 @@ createIndicatorsPage = function(page)
     bg:SetPoint("BOTTOMRIGHT", -8, 44)
     bg:SetColorTexture(1, 1, 1, 0.03)
 
-    local function heading(x, y, label)
+    local h = { refreshers = refreshers }
+    function h.heading(x, y, label)
         local fs = text(page, fontTitle, 1, 0.82, 0)
         fs:SetPoint("TOPLEFT", x, y)
         fs:SetText(label)
     end
-    local function note(x, y, label, width)
+    function h.note(x, y, label, width)
         local fs = text(page, fontSmall, 0.65, 0.65, 0.65)
         fs:SetPoint("TOPLEFT", x, y)
         fs:SetWidth(width or 215)
@@ -423,7 +425,7 @@ createIndicatorsPage = function(page)
         fs:SetText(label)
         return fs
     end
-    local function check(x, y, label, get, set)
+    function h.check(x, y, label, get, set)
         local cb = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
         cb:SetSize(24, 24)
         cb:SetPoint("TOPLEFT", x, y)
@@ -441,6 +443,41 @@ createIndicatorsPage = function(page)
         refreshers[#refreshers + 1] = function() cb:SetChecked(get() and true or false) end
         return cb
     end
+    function h.stepper(x, y, label, get, step, min, max, fmt, apply)
+        local l = text(page, fontNormal)
+        l:SetPoint("TOPLEFT", x, y - 4)
+        l:SetText(label)
+        local minus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+        minus:SetSize(26, 22)
+        minus:SetPoint("TOPLEFT", x + 82, y)
+        minus:SetText("-")
+        local val = text(page, fontNormal, 1, 1, 1)
+        val:SetPoint("LEFT", minus, "RIGHT", 4, 0)
+        val:SetWidth(40)
+        local plus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+        plus:SetSize(26, 22)
+        plus:SetPoint("LEFT", val, "RIGHT", 4, 0)
+        plus:SetText("+")
+        local function change(d)
+            local v = math.floor((get() + d) / step + 0.5) * step
+            v = math.max(min, math.min(max, v))
+            if not apply(v) then M.Msg("v boji to hra nedovoli - zkus to po boji.") end
+            M.UpdateAll()
+            page.refresh()
+        end
+        minus:SetScript("OnClick", function() change(-step) end)
+        plus:SetScript("OnClick", function() change(step) end)
+        refreshers[#refreshers + 1] = function() val:SetText(fmt:format(get())) end
+    end
+    return h
+end
+
+-------------------------------------------------------------------------------
+-- Záložka „Ukazatele“: buffy, debuffy, aggro, cíl, mana, štíty, oživení
+-------------------------------------------------------------------------------
+createIndicatorsPage = function(page)
+    local h = pageHelpers(page)
+    local heading, note, check = h.heading, h.note, h.check
 
     -- Buffy ------------------------------------------------------------------
     local x = 18
@@ -469,7 +506,7 @@ createIndicatorsPage = function(page)
     eb:SetScript("OnEditFocusLost", saveBuffs)
     eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     local hint = note(x + 4, -254, "")
-    refreshers[#refreshers + 1] = function()
+    h.refreshers[#h.refreshers + 1] = function()
         if not eb:HasFocus() then eb:SetText(MedicDB.buffNames[M.Class] or "") end
         local def = M.BuffDefaultText()
         hint:SetText("Víc buffů odděl čárkou, anglicky. Prázdné = výchozí" .. (def and (": " .. def) or " (tvé povolání žádný nemá)") .. ".")
@@ -490,67 +527,72 @@ createIndicatorsPage = function(page)
     check(x, -74, "Ukazovat aggro", function() return MedicDB.aggro end, function(v) MedicDB.aggro = v end)
     check(x, -100, "Proužek nahoře", function() return MedicDB.aggroStyle ~= "ramecek" end, function() MedicDB.aggroStyle = "pruh" end)
     check(x, -126, "Celý rámeček červeně", function() return MedicDB.aggroStyle == "ramecek" end, function() MedicDB.aggroStyle = "ramecek" end)
-    note(x + 4, -158, "Když hra hodnotu aggra skrývá (tajná hodnota), aggro se neukáže.")
+    check(x, -152, "Lebka: na koho útočí můj cíl", function() return MedicDB.targetOf end, function(v) MedicDB.targetOf = v end)
+    note(x + 4, -184, "Aggro se neukáže, když ho hra skrývá. Lebka funguje vždy, když máš v cíli nepřítele.")
 
-    -- Vzhled -----------------------------------------------------------------
-    heading(18, -296, "Vzhled")
-    check(18, -320, "Barva podle zdraví (jinak podle povolání)", function() return MedicDB.colorMode ~= "class" end,
+    -- Další ------------------------------------------------------------------
+    heading(18, -300, "Další ukazatele")
+    check(18, -324, "Zvýraznit můj cíl (bílý rámeček)", function() return MedicDB.targetHighlight end, function(v) MedicDB.targetHighlight = v end)
+    check(18, -350, "Štíty (absorpce) za zdravím", function() return MedicDB.absorbs end, function(v) MedicDB.absorbs = v end)
+    check(258, -324, "Pruh many", function() return MedicDB.powerBar end, function(v) MedicDB.powerBar = v end)
+    check(258, -350, "Manu jen u healerů", function() return MedicDB.powerHealersOnly end, function(v) MedicDB.powerHealersOnly = v end)
+    check(498, -324, "Ikonka oživování u mrtvých", function() return MedicDB.rezIcon end, function(v) MedicDB.rezIcon = v end)
+end
+
+-------------------------------------------------------------------------------
+-- Záložka „Vzhled“: barvy, role, řazení, rozložení, velikosti
+-------------------------------------------------------------------------------
+createLookPage = function(page)
+    local h = pageHelpers(page)
+    local heading, note, check, stepper = h.heading, h.note, h.check, h.stepper
+
+    heading(18, -50, "Vzhled")
+    check(18, -74, "Barva podle zdraví (jinak podle povolání)", function() return MedicDB.colorMode ~= "class" end,
         function(v) MedicDB.colorMode = v and "hp" or "class" end)
-    check(18, -346, "Ikony rolí (tank, healer, dps)", function() return MedicDB.roleIcons end, function(v) MedicDB.roleIcons = v end)
-    check(258, -320, "Řadit: tank vlevo, pak healer, pak dps", function() return MedicDB.sortRoles end, function(v)
+    check(18, -100, "Ikony rolí (tank, healer, dps)", function() return MedicDB.roleIcons end, function(v) MedicDB.roleIcons = v end)
+    check(258, -74, "Řadit: tank první, pak healer, pak dps", function() return MedicDB.sortRoles end, function(v)
         MedicDB.sortRoles = v
         if not M.ApplySort() then M.Msg("v boji to hra nedovoli - projevi se po boji.") end
     end)
-    check(258, -346, "Ikonky mých HoTů s odpočtem", function() return MedicDB.hots end, function(v) MedicDB.hots = v end)
+    check(258, -100, "Ikonky mých HoTů s odpočtem", function() return MedicDB.hots end, function(v) MedicDB.hots = v end)
 
-    -- Velikost ---------------------------------------------------------------
-    heading(18, -382, "Velikost rámečků")
-    local function stepper(x2, label, get, step, min, max, fmt, apply, dy)
-        dy = dy or 0
-        local l = text(page, fontNormal)
-        l:SetPoint("TOPLEFT", x2, -410 + dy)
-        l:SetText(label)
-        local minus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
-        minus:SetSize(26, 22)
-        minus:SetPoint("TOPLEFT", x2 + 62, -406 + dy)
-        minus:SetText("-")
-        local val = text(page, fontNormal, 1, 1, 1)
-        val:SetPoint("LEFT", minus, "RIGHT", 4, 0)
-        val:SetWidth(40)
-        local plus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
-        plus:SetSize(26, 22)
-        plus:SetPoint("LEFT", val, "RIGHT", 4, 0)
-        plus:SetText("+")
-        local function change(d)
-            local v = math.floor((get() + d) / step + 0.5) * step
-            v = math.max(min, math.min(max, v))
-            if not apply(v) then M.Msg("v boji to hra nedovoli - zkus to po boji.") end
-            page.refresh()
-        end
-        minus:SetScript("OnClick", function() change(-step) end)
-        plus:SetScript("OnClick", function() change(step) end)
-        refreshers[#refreshers + 1] = function() val:SetText(fmt:format(get())) end
+    heading(18, -140, "Rozložení")
+    local function grid(v)
+        if not M.ApplyGrid() then M.Msg("v boji to hra nedovoli - projevi se po boji.") end
     end
-    stepper(22, "Šířka", function() return MedicDB.width end, 5, 50, 200, "%d",
-        function(v) return M.SetLayout(v, MedicDB.height, MedicDB.scale) end)
-    stepper(222, "Výška", function() return MedicDB.height end, 2, 20, 80, "%d",
-        function(v) return M.SetLayout(MedicDB.width, v, MedicDB.scale) end)
-    stepper(422, "Měřítko", function() return MedicDB.scale end, 0.1, 0.5, 2, "%.1f",
-        function(v) return M.SetLayout(MedicDB.width, MedicDB.height, v) end)
-    stepper(22, "HoTy", function() return MedicDB.hotSize or 15 end, 1, 8, 30, "%d",
-        function(v) M.SetIconSize("hotSize", v) return true end, -30)
-    stepper(222, "Buff", function() return MedicDB.buffSize or 12 end, 1, 8, 30, "%d",
-        function(v) M.SetIconSize("buffSize", v) return true end, -30)
-    stepper(422, "Debuff", function() return MedicDB.debuffSize or 14 end, 1, 8, 30, "%d",
-        function(v) M.SetIconSize("debuffSize", v) return true end, -30)
-end
+    check(18, -164, "Vedle sebe (další řada pod nimi)", function() return MedicDB.orientation ~= "vertical" end,
+        function() MedicDB.orientation = "horizontal"; grid() end)
+    check(18, -190, "Pod sebou (další sloupec vedle)", function() return MedicDB.orientation == "vertical" end,
+        function() MedicDB.orientation = "vertical"; grid() end)
+    stepper(258, -166, "V řadě", function() return MedicDB.perRow or 5 end, 1, 1, 40, "%d",
+        function(v) MedicDB.perRow = v; return M.ApplyGrid() end)
+    stepper(258, -194, "Mezera", function() return MedicDB.spacing or 2 end, 1, 0, 20, "%d",
+        function(v) MedicDB.spacing = v; return M.ApplyGrid() end)
+    note(500, -168, "„V řadě“ = kolik hráčů je vedle sebe (nebo pod sebou), než začne další řada.", 190)
 
+    heading(18, -236, "Velikost")
+    stepper(18, -262, "Šířka", function() return MedicDB.width end, 5, 50, 200, "%d",
+        function(v) return M.SetLayout(v, MedicDB.height, MedicDB.scale) end)
+    stepper(258, -262, "Výška", function() return MedicDB.height end, 2, 20, 80, "%d",
+        function(v) return M.SetLayout(MedicDB.width, v, MedicDB.scale) end)
+    stepper(498, -262, "Měřítko", function() return MedicDB.scale end, 0.1, 0.5, 2, "%.1f",
+        function(v) return M.SetLayout(MedicDB.width, MedicDB.height, v) end)
+    stepper(18, -292, "HoTy", function() return MedicDB.hotSize or 15 end, 1, 8, 30, "%d",
+        function(v) M.SetIconSize("hotSize", v) return true end)
+    stepper(258, -292, "Buff", function() return MedicDB.buffSize or 12 end, 1, 8, 30, "%d",
+        function(v) M.SetIconSize("buffSize", v) return true end)
+    stepper(498, -292, "Debuff", function() return MedicDB.debuffSize or 14 end, 1, 8, 30, "%d",
+        function(v) M.SetIconSize("debuffSize", v) return true end)
+    stepper(18, -322, "Mana", function() return MedicDB.powerHeight or 4 end, 1, 2, 12, "%d",
+        function(v) MedicDB.powerHeight = v; return true end)
+    note(18, -350, "Šířku, výšku, měřítko a rozložení hra v boji měnit nedovolí. Ikonky a manu jde měnit kdykoli.", 660)
+end
 -------------------------------------------------------------------------------
 -- Okno
 -------------------------------------------------------------------------------
 local function createWindow()
     local w = LEFT + #COLUMNS * (CELL_W + GAP) + 12
-    local h = TOP + #ROWS * (CELL_H + GAP) + 276
+    local h = TOP + #ROWS * (CELL_H + GAP) + 216
     win = CreateFrame("Frame", "MedicOptions", UIParent, "BackdropTemplate")
     win:SetSize(w, h)
     win:SetPoint("CENTER")
@@ -589,9 +631,13 @@ local function createWindow()
     page3:SetAllPoints()
     page3:Hide()
     createKeysPage(page3)
-    local pages = { page1, page3, page2 }
+    local page4 = CreateFrame("Frame", nil, win)
+    page4:SetAllPoints()
+    page4:Hide()
+    createLookPage(page4)
+    local pages = { page1, page3, page2, page4 }
     local tabs = {}
-    local TAB_LABELS = { { "Myš", 80 }, { "Klávesnice", 120 }, { "Ukazatele a velikost", 190 } }
+    local TAB_LABELS = { { "Myš", 70 }, { "Klávesnice", 110 }, { "Ukazatele", 105 }, { "Vzhled", 85 } }
     local function showPage(n)
         for i, p in ipairs(pages) do p:SetShown(i == n) end
         for i, tb in ipairs(tabs) do tb:SetEnabled(i ~= n) end
