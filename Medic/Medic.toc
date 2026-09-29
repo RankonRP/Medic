@@ -3,7 +3,7 @@
 ## Notes: Ramecky skupiny a raidu s lecenim na kliknuti mysi
 ## IconTexture: Interface\Icons\Spell_Holy_FlashHeal
 ## Author: salifox
-## Version: 0.6.1
+## Version: 0.6.2
 ## SavedVariables: MedicDB
 
 Medic.lua

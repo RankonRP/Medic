@@ -915,10 +915,14 @@ end
 
 -- rozložení: vedle sebe / pod sebou, počet v řadě, mezery (jen mimo boj)
 function M.ApplyGrid()
-    if not header or InCombatLockdown() then return false end
+    if not header then return false end
+    if InCombatLockdown() then M.gridPending = true return false end
+    M.gridPending = false
     local per, sp = MedicDB.perRow or 5, MedicDB.spacing or 2
-    -- staré ukotvení pryč, jinak se k němu přidá nové a rámečky „ujedou“ šikmo
-    for _, btn in ipairs(buttons) do btn:ClearAllPoints() end
+    -- hlavička přeskládá rámečky po každém atributu -> schovat, nastavit vše, smazat staré
+    -- ukotvení (jinak se smíchá se starým a rámečky ujedou šikmo) a ukázat = jedno čisté rozložení
+    local shown = header:IsShown()
+    header:Hide()
     if MedicDB.orientation == "vertical" then
         header:SetAttribute("xOffset", 0)
         header:SetAttribute("yOffset", -sp)
@@ -933,9 +937,10 @@ function M.ApplyGrid()
     header:SetAttribute("columnSpacing", sp)
     header:SetAttribute("maxColumns", math.ceil(40 / per))
     header:SetAttribute("unitsPerColumn", per)
+    for _, btn in ipairs(buttons) do btn:ClearAllPoints() end
+    if shown then header:Show() end
     return true
 end
-
 -- velikost a měřítko rámečků (jen mimo boj); vrací false, když to hra teď nedovolí
 function M.SetLayout(w, h, s)
     if InCombatLockdown() then return false end
@@ -1158,7 +1163,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     end
     if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" then
         if event == "PLAYER_REGEN_ENABLED" and pendingApply then M.ApplyBindings() end
-        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort(); M.ApplyGrid(); M.WrapPending() end
+        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort(); M.WrapPending(); if M.gridPending then M.ApplyGrid() end end
         updateAll()   -- buff „jen mimo boj“
         return
     end
