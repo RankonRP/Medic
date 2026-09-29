@@ -64,7 +64,7 @@ local BACKDROP = {
 }
 
 local win, cells, chooser, typer = nil, {}, nil, nil
-local createIndicatorsPage
+local createIndicatorsPage, createKeysPage, refreshKeys
 
 local function text(parent, font, r, g, b)
     local fs = parent:CreateFontString(nil, "OVERLAY")
@@ -106,8 +106,22 @@ end
 
 local refresh
 
+-- klíč políčka: "shift-1" = myš, "key:SHIFT-Q" = klávesa při najetí na rámeček
+local function keyOf(key) return key:match("^key:(.+)$") end
+
+local function getAction(key)
+    local k = keyOf(key)
+    if k then return M.GetKeys()[k] or nil end
+    return M.GetBinds()[key]
+end
+
 local function setBind(key, action)
-    M.SetBind(key, action)
+    local k = keyOf(key)
+    if k then
+        M.SetKey(k, action or false)   -- „výchozí“ u klávesy = bez kouzla
+    else
+        M.SetBind(key, action)
+    end
     combatNote()
     refresh()
 end
@@ -144,7 +158,7 @@ local function openTyper(key, cell)
     typer.key = key
     typer:ClearAllPoints()
     typer:SetPoint("TOP", cell, "BOTTOM", 0, -2)
-    local current = M.GetBinds()[key]
+    local current = getAction(key)
     typer.eb:SetText((current and current ~= "target" and current ~= "menu") and current or "")
     typer:Show()
     typer.eb:SetFocus()
@@ -237,7 +251,7 @@ local function createCell(parent, key)
         openChooser(self.key, self)
     end)
     cell:SetScript("OnEnter", function(self)
-        local action = M.GetBinds()[self.key]
+        local action = getAction(self.key)
         showTip(self, "ANCHOR_RIGHT", {
             { self.label },
             { action and actionLabel(action) or "nic", 1, 0.82, 0 },
@@ -251,27 +265,137 @@ local function createCell(parent, key)
     return cell
 end
 
+local function paintCell(cell, action, custom)
+    if action then
+        cell.icon:SetTexture(actionIcon(action))
+        cell.icon:SetDesaturated(action ~= "target" and action ~= "menu" and not M.KnowsSpell(action))
+        cell.nameText:SetText(actionLabel(action))
+        local known = action == "target" or action == "menu" or M.KnowsSpell(action)
+        if known then cell.nameText:SetTextColor(1, 1, 1) else cell.nameText:SetTextColor(0.6, 0.6, 0.6) end
+    else
+        cell.icon:SetTexture(nil)
+        cell.nameText:SetText("—")
+        cell.nameText:SetTextColor(0.45, 0.45, 0.45)
+    end
+    cell:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
+    -- zlatý rámeček = nastavil sis sám, šedý = výchozí
+    if custom then cell:SetBackdropBorderColor(1, 0.82, 0, 1) else cell:SetBackdropBorderColor(0.3, 0.3, 0.3, 1) end
+end
+
 function refresh()
     if not win or not win:IsShown() then return end
     local binds = M.GetBinds()
-    for key, cell in pairs(cells) do
-        local action = binds[key]
-        local custom = M.IsCustom(key)
-        if action then
-            cell.icon:SetTexture(actionIcon(action))
-            cell.icon:SetDesaturated(action ~= "target" and action ~= "menu" and not M.KnowsSpell(action))
-            cell.nameText:SetText(actionLabel(action))
-            local known = action == "target" or action == "menu" or M.KnowsSpell(action)
-            if known then cell.nameText:SetTextColor(1, 1, 1) else cell.nameText:SetTextColor(0.6, 0.6, 0.6) end
-        else
-            cell.icon:SetTexture(nil)
-            cell.nameText:SetText("—")
-            cell.nameText:SetTextColor(0.45, 0.45, 0.45)
-        end
-        cell:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-        -- zlatý rámeček = nastavil sis sám, šedý = výchozí
-        if custom then cell:SetBackdropBorderColor(1, 0.82, 0, 1) else cell:SetBackdropBorderColor(0.3, 0.3, 0.3, 1) end
+    for key, cell in pairs(cells) do paintCell(cell, binds[key], M.IsCustom(key)) end
+    if refreshKeys then refreshKeys() end
+end
+
+-------------------------------------------------------------------------------
+-- Záložka „Klávesnice“: kouzlo na klávesu při najetí myší na rámeček
+-------------------------------------------------------------------------------
+local KEY_NAMES = {
+    SPACE = "Mezerník", TAB = "Tab", ENTER = "Enter", BACKSPACE = "Backspace",
+    MOUSEWHEELUP = "Kolečko nahoru", MOUSEWHEELDOWN = "Kolečko dolů",
+}
+local function keyText(k)
+    local mods, base = k:match("^(.-)([^%-]+)$")
+    base = KEY_NAMES[base] or base:gsub("^NUMPAD", "Num ")
+    mods = mods:gsub("ALT%-", "Alt + "):gsub("CTRL%-", "Ctrl + "):gsub("SHIFT%-", "Shift + ")
+    return mods .. base
+end
+local IGNORE_KEYS = { LSHIFT = true, RSHIFT = true, LCTRL = true, RCTRL = true, LALT = true, RALT = true, UNKNOWN = true, LMETA = true, RMETA = true }
+
+createKeysPage = function(page)
+    local sub = text(page, fontSmall, 0.75, 0.75, 0.75)
+    sub:SetPoint("TOPLEFT", 14, -40)
+    sub:SetWidth(680)
+    sub:SetJustifyH("LEFT")
+    sub:SetText("Najeď myší na rámeček hráče a zmáčkni klávesu – kouzlo se sešle na něj. Jinde klávesy fungují normálně.\nPřidej klávesu a pak na políčko přetáhni kouzlo ze spellbooku. Každé povolání má vlastní klávesy.")
+
+    local add = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+    add:SetSize(170, 24)
+    add:SetPoint("TOPLEFT", 12, -78)
+    czechButton(add)
+    add:SetText("Přidat klávesu")
+
+    local empty = text(page, fontNormal, 0.6, 0.6, 0.6)
+    empty:SetPoint("TOPLEFT", 20, -120)
+    empty:SetText("Zatím žádné klávesy. Klikni na „Přidat klávesu“.")
+
+    -- zachytávání klávesy
+    local cap = CreateFrame("Button", nil, page, "BackdropTemplate")
+    cap:SetPoint("LEFT", add, "RIGHT", 10, 0)
+    cap:SetSize(360, 24)
+    cap:SetBackdrop(BACKDROP)
+    cap:SetBackdropColor(0.3, 0.8, 0.5, 0.25)
+    cap:SetBackdropBorderColor(0.3, 0.8, 0.5, 1)
+    local capText = text(cap, fontNormal)
+    capText:SetPoint("CENTER")
+    capText:SetText("Zmáčkni klávesu (i se Shift/Ctrl/Alt)… Esc = zrušit")
+    cap:Hide()
+    cap:EnableKeyboard(true)
+    cap:SetScript("OnKeyDown", function(self, key)
+        self:SetPropagateKeyboardInput(false)
+        if IGNORE_KEYS[key] then return end
+        self:Hide()
+        if key == "ESCAPE" then return end
+        local combo = (IsAltKeyDown() and "ALT-" or "") .. (IsControlKeyDown() and "CTRL-" or "") .. (IsShiftKeyDown() and "SHIFT-" or "") .. key
+        local n = 0
+        for _ in pairs(M.GetKeys()) do n = n + 1 end
+        if M.GetKeys()[combo] == nil and n >= 12 then M.Msg("vic nez 12 klaves se do okna nevejde.") return end
+        if M.GetKeys()[combo] == nil then M.SetKey(combo, false) end
+        combatNote()
+        refresh()
+    end)
+    cap:SetScript("OnMouseDown", function(self) self:Hide() end)
+    add:SetScript("OnClick", function() cap:Show() end)
+    page:HookScript("OnHide", function() cap:Hide() end)
+
+    -- řádky: 2 sloupce po 6
+    local rows = {}
+    for i = 1, 12 do
+        local col, r = math.floor((i - 1) / 6), (i - 1) % 6
+        local x, y = 14 + col * 350, -116 - r * 50
+        local row = {}
+        row.label = text(page, fontTitle, 1, 0.82, 0)
+        row.label:SetPoint("TOPLEFT", x, y - 14)
+        row.label:SetWidth(120)
+        row.label:SetJustifyH("RIGHT")
+        row.cell = createCell(page, "key:?")
+        row.cell:SetPoint("TOPLEFT", x + 128, y)
+        row.del = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+        row.del:SetSize(26, 22)
+        row.del:SetPoint("LEFT", row.cell, "RIGHT", 6, 0)
+        row.del:SetText("X")
+        row.del:SetScript("OnClick", function()
+            M.SetKey(row.key, nil)
+            combatNote()
+            refresh()
+        end)
+        rows[i] = row
     end
+
+    refreshKeys = function()
+        if not page:IsShown() then return end
+        local keys = {}
+        for k in pairs(M.GetKeys()) do keys[#keys + 1] = k end
+        table.sort(keys)
+        empty:SetShown(#keys == 0)
+        for i, row in ipairs(rows) do
+            local k = keys[i]
+            row.key = k
+            local show = k ~= nil
+            row.label:SetShown(show)
+            row.cell:SetShown(show)
+            row.del:SetShown(show)
+            if show then
+                row.label:SetText(keyText(k))
+                row.cell.key = "key:" .. k
+                row.cell.label = "Klávesa " .. keyText(k)
+                paintCell(row.cell, M.GetKeys()[k] or nil, true)
+            end
+        end
+    end
+    page:HookScript("OnShow", refreshKeys)
 end
 
 -------------------------------------------------------------------------------
@@ -379,13 +503,14 @@ createIndicatorsPage = function(page)
 
     -- Velikost ---------------------------------------------------------------
     heading(18, -322, "Velikost rámečků")
-    local function stepper(x2, label, get, step, min, max, fmt, apply)
+    local function stepper(x2, label, get, step, min, max, fmt, apply, dy)
+        dy = dy or 0
         local l = text(page, fontNormal)
-        l:SetPoint("TOPLEFT", x2, -350)
+        l:SetPoint("TOPLEFT", x2, -350 + dy)
         l:SetText(label)
         local minus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
         minus:SetSize(26, 22)
-        minus:SetPoint("TOPLEFT", x2 + 62, -346)
+        minus:SetPoint("TOPLEFT", x2 + 62, -346 + dy)
         minus:SetText("-")
         local val = text(page, fontNormal, 1, 1, 1)
         val:SetPoint("LEFT", minus, "RIGHT", 4, 0)
@@ -410,6 +535,8 @@ createIndicatorsPage = function(page)
         function(v) return M.SetLayout(MedicDB.width, v, MedicDB.scale) end)
     stepper(422, "Měřítko", function() return MedicDB.scale end, 0.1, 0.5, 2, "%.1f",
         function(v) return M.SetLayout(MedicDB.width, MedicDB.height, v) end)
+    stepper(22, "HoTy", function() return MedicDB.hotSize or 15 end, 1, 8, 30, "%d",
+        function(v) M.SetHotSize(v) return true end, -30)
 end
 
 -------------------------------------------------------------------------------
@@ -417,7 +544,7 @@ end
 -------------------------------------------------------------------------------
 local function createWindow()
     local w = LEFT + #COLUMNS * (CELL_W + GAP) + 12
-    local h = TOP + #ROWS * (CELL_H + GAP) + 186
+    local h = TOP + #ROWS * (CELL_H + GAP) + 216
     win = CreateFrame("Frame", "MedicOptions", UIParent, "BackdropTemplate")
     win:SetSize(w, h)
     win:SetPoint("CENTER")
@@ -452,26 +579,30 @@ local function createWindow()
     page2:SetAllPoints()
     page2:Hide()
     createIndicatorsPage(page2)
-    local tab1 = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
-    tab1:SetSize(150, 24)
-
-    czechButton(tab1)
-    tab1:SetText("Kouzla na myši")
-    local tab2 = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
-    tab2:SetSize(190, 24)
-    czechButton(tab2)
-    tab2:SetText("Ukazatele a velikost")
-    tab2:SetPoint("TOPRIGHT", -34, -8)
-    tab1:SetPoint("RIGHT", tab2, "LEFT", -6, 0)
+    local page3 = CreateFrame("Frame", nil, win)
+    page3:SetAllPoints()
+    page3:Hide()
+    createKeysPage(page3)
+    local pages = { page1, page3, page2 }
+    local tabs = {}
+    local TAB_LABELS = { { "Myš", 80 }, { "Klávesnice", 120 }, { "Ukazatele a velikost", 190 } }
     local function showPage(n)
-        page1:SetShown(n == 1)
-        page2:SetShown(n == 2)
-        tab1:SetEnabled(n ~= 1)
-        tab2:SetEnabled(n ~= 2)
-        if n == 2 and page2.refresh then page2.refresh() end
+        for i, p in ipairs(pages) do p:SetShown(i == n) end
+        for i, tb in ipairs(tabs) do tb:SetEnabled(i ~= n) end
+        if pages[n].refresh then pages[n].refresh() end
+        if n == 1 then refresh() end
     end
-    tab1:SetScript("OnClick", function() showPage(1) end)
-    tab2:SetScript("OnClick", function() showPage(2) end)
+    local prev
+    for i = #TAB_LABELS, 1, -1 do
+        local tb = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+        tb:SetSize(TAB_LABELS[i][2], 24)
+        czechButton(tb)
+        tb:SetText(TAB_LABELS[i][1])
+        if prev then tb:SetPoint("RIGHT", prev, "LEFT", -6, 0) else tb:SetPoint("TOPRIGHT", -34, -8) end
+        tb:SetScript("OnClick", function() showPage(i) end)
+        tabs[i] = tb
+        prev = tb
+    end
     showPage(1)
 
     local sub = text(page1, fontSmall, 0.75, 0.75, 0.75)

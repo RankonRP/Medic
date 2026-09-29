@@ -3,6 +3,7 @@
 Rámečky skupiny a raidu pro WoW: Forever s léčením na kliknutí myši (podobně jako HealBot).
 
 - kouzla na tlačítka myši (i se Shift/Ctrl/Alt), výchozí podle povolání (paladin, kněz, druid, šaman)
+- kouzla na klávesy při najetí myší na rámeček (záložka Klávesnice)
 - zvýraznění debuffů, které umíš odstranit
 - příchozí léčení, aggro, dosah
 - řazení podle role (tank vlevo, healer, dps), ikony rolí

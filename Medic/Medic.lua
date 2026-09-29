@@ -73,6 +73,7 @@ local DEFAULTS = {
     point = { "CENTER", -300, 0 },
     locked = false,
     classBinds = {},   -- ruční přiřazení hráče podle povolání: classBinds.DRUID["shift-1"] = "Remove Curse"
+    classKeys = {},    -- klávesy při najetí na rámeček: classKeys.DRUID["SHIFT-Q"] = "Rejuvenation" (false = klávesa bez kouzla)
     showSolo = true,
     buffs = true,        -- hlídat chybějící buff
     buffOOC = false,     -- ikonku buffu ukazovat jen mimo boj
@@ -88,6 +89,7 @@ local DEFAULTS = {
     roleIcons = true,    -- ikonka role (tank, healer, dps)
     sortRoles = true,    -- řadit tank -> healer -> dps zleva doprava
     hots = true,         -- ikonky mých HoTů s odpočtem
+    hotSize = 15,        -- velikost ikonek HoTů
 }
 
 -- HoTy a štíty, které se ukazují v rámečku (když hra názvy aur neskrývá; jinak všechny krátké moje buffy)
@@ -200,6 +202,7 @@ end
 -- Vzhled jednoho rámečku (volá se i v boji – jen nechráněné věci)
 -------------------------------------------------------------------------------
 local buttons = {}
+local wrapKeys   -- klávesy při najetí (definováno níž)
 local updateButton
 
 local function styleButton(btn)
@@ -305,8 +308,6 @@ local function styleButton(btn)
     btn.hotIcons = {}
     for i = 1, 3 do
         local f = CreateFrame("Frame", nil, overlay)
-        f:SetSize(15, 15)
-        f:SetPoint("BOTTOMRIGHT", -3 - (i - 1) * 16, 3)
         f.icon = f:CreateTexture(nil, "ARTWORK")
         f.icon:SetAllPoints()
         f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
@@ -320,6 +321,7 @@ local function styleButton(btn)
         f:Hide()
         btn.hotIcons[i] = f
     end
+    M.LayoutHots(btn)
 
     local debuffIcon = overlay:CreateTexture(nil, "OVERLAY")
     debuffIcon:SetSize(14, 14)
@@ -334,6 +336,7 @@ local function styleButton(btn)
     buff:Hide()
     btn.buffIcon = buff
 
+    wrapKeys(btn)
     btn:HookScript("OnAttributeChanged", function(self, attr)
         if attr == "unit" then updateButton(self) end
     end)
@@ -423,7 +426,21 @@ local function setHealthColor(btn, unit, hp, maxHp, classColor)
     if not ok then btn.hp:SetStatusBarColor(classColor.r, classColor.g, classColor.b) end
 end
 
--- Ikonky mých HoTů s odpočtem
+-- Ikonky mých HoTů s odpočtem (velikost z nastavení; nejsou chráněné, jde měnit i v boji)
+function M.LayoutHots(btn)
+    local s = MedicDB.hotSize or 15
+    for i, f in ipairs(btn.hotIcons) do
+        f:SetSize(s, s)
+        f:ClearAllPoints()
+        f:SetPoint("BOTTOMRIGHT", -3 - (i - 1) * (s + 1), 3)
+        f.time:SetFont(FONT, math.max(8, math.floor(s * 0.6)), "OUTLINE")
+    end
+end
+function M.SetHotSize(s)
+    MedicDB.hotSize = s
+    for _, btn in ipairs(buttons) do M.LayoutHots(btn) end
+end
+
 local function hotTime(f)
     if not f.expires then f.time:SetText("") return end
     local left = f.expires - GetTime()
@@ -626,6 +643,70 @@ end
 -------------------------------------------------------------------------------
 -- Přiřazení kouzel (jen mimo boj – hra v boji nedovolí měnit bezpečná tlačítka)
 -------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-- Klávesy při najetí na rámeček: při OnEnter si rámeček (v bezpečném kódu) přivlastní
+-- klávesy jako „kliknutí“ virtuálním tlačítkem MK1, MK2… a při OnLeave je pustí.
+-------------------------------------------------------------------------------
+local MAX_KEYS = 24
+local function keyList()
+    local list = {}
+    for key, action in pairs(MedicDB.classKeys[playerClass] or {}) do
+        if action then list[#list + 1] = { key = key, action = action } end
+    end
+    table.sort(list, function(a, b) return a.key < b.key end)
+    while #list > MAX_KEYS do table.remove(list) end
+    return list
+end
+
+local function keyAttributes(i, action)
+    local b = "-MK" .. i
+    if action == "target" then return { ["*type" .. b] = "target" } end
+    if action == "menu" then return { ["*type" .. b] = "togglemenu" } end
+    return { ["*type" .. b] = "spell", ["*spell" .. b] = action }
+end
+
+local keyHandler = CreateFrame("Frame", "MedicKeyHandler", UIParent, "SecureHandlerBaseTemplate")
+local KEY_ENTER = [[
+    local n = control:GetAttribute("medic-keys") or 0
+    for i = 1, n do
+        local k = control:GetAttribute("medic-key" .. i)
+        if k then self:SetBindingClick(true, k, self, "MK" .. i) end
+    end
+]]
+local KEY_LEAVE = [[ self:ClearBindings() ]]
+local wrapped, pendingWrap = {}, {}
+
+wrapKeys = function(btn)
+    if wrapped[btn] then return end
+    if InCombatLockdown() then pendingWrap[btn] = true return end
+    SecureHandlerWrapScript(btn, "OnEnter", keyHandler, KEY_ENTER)
+    SecureHandlerWrapScript(btn, "OnLeave", keyHandler, KEY_LEAVE)
+    SecureHandlerWrapScript(btn, "OnHide", keyHandler, KEY_LEAVE)
+    wrapped[btn] = true
+    pendingWrap[btn] = nil
+end
+
+-- rámečky vzniklé v boji dostanou klávesy až po boji
+function M.WrapPending()
+    for btn in pairs(pendingWrap) do wrapKeys(btn) end
+end
+
+local function applyKeys()
+    local list = keyList()
+    keyHandler:SetAttribute("medic-keys", #list)
+    for i = 1, MAX_KEYS do keyHandler:SetAttribute("medic-key" .. i, list[i] and list[i].key or nil) end
+    for _, btn in ipairs(buttons) do
+        for i = 1, MAX_KEYS do
+            btn:SetAttribute("*type-MK" .. i, nil)
+            btn:SetAttribute("*spell-MK" .. i, nil)
+        end
+        for i, kv in ipairs(list) do
+            for attr, value in pairs(keyAttributes(i, kv.action)) do btn:SetAttribute(attr, value) end
+        end
+        wrapKeys(btn)
+    end
+end
+
 local function buildSnippet(binds)
     local lines = {
         ("self:SetWidth(%d)"):format(MedicDB.width),
@@ -633,6 +714,11 @@ local function buildSnippet(binds)
     }
     for key, action in pairs(binds) do
         for attr, value in pairs(bindAttributes(key, action)) do
+            lines[#lines + 1] = ("self:SetAttribute(%q, %q)"):format(attr, value)
+        end
+    end
+    for i, kv in ipairs(keyList()) do
+        for attr, value in pairs(keyAttributes(i, kv.action)) do
             lines[#lines + 1] = ("self:SetAttribute(%q, %q)"):format(attr, value)
         end
     end
@@ -659,6 +745,7 @@ function M.ApplyBindings()
         end
         btn:SetSize(MedicDB.width, MedicDB.height)
     end
+    applyKeys()
     -- přepočítat rozložení hlavičky
     header:SetAttribute("showSolo", MedicDB.showSolo)
 end
@@ -672,6 +759,16 @@ function M.SetBind(key, action)
     MedicDB.classBinds[playerClass][key] = action
     M.ApplyBindings()
 end
+-- klávesy: action = kouzlo / "target" / "menu"; false = klávesa zatím bez kouzla; nil = smazat
+function M.SetKey(key, action)
+    MedicDB.classKeys[playerClass] = MedicDB.classKeys[playerClass] or {}
+    MedicDB.classKeys[playerClass][key] = action
+    M.ApplyBindings()
+end
+function M.GetKeys()
+    return MedicDB.classKeys[playerClass] or {}
+end
+M.MaxKeys = MAX_KEYS
 function M.ResetBinds()
     MedicDB.classBinds[playerClass] = nil
     M.ApplyBindings()
@@ -922,7 +1019,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     end
     if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" then
         if event == "PLAYER_REGEN_ENABLED" and pendingApply then M.ApplyBindings() end
-        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort() end
+        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort(); M.WrapPending() end
         updateAll()   -- buff „jen mimo boj“
         return
     end
