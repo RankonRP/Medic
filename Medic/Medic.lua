@@ -414,6 +414,16 @@ local function styleButton(btn, preview)
         GameTooltip:Show()
     end)
     btn:HookScript("OnLeave", function() GameTooltip:Hide() end)
+    -- ladění: /medic ladit kliky -> po každém kliknutí vypíše, co hra udělala
+    btn:HookScript("PostClick", function(self, button)
+        if not M.debugClicks then return end
+        local function mc(k) local ok, v = pcall(IsModifiedClick, k) return ok and tostring(v) or "?" end
+        local ty = SecureButton_GetModifiedAttribute and SecureButton_GetModifiedAttribute(self, "type", button)
+        local u = SecureButton_GetModifiedUnit and SecureButton_GetModifiedUnit(self, button)
+        msg(("klik %s shift=%s ctrl=%s alt=%s | typ=%s | na=%s | selfcast=%s focuscast=%s"):format(
+            tostring(button), tostring(IsShiftKeyDown()), tostring(IsControlKeyDown()), tostring(IsAltKeyDown()),
+            tostring(ty), tostring(u), mc("SELFCAST"), mc("FOCUSCAST")))
+    end)
 end
 
 -------------------------------------------------------------------------------
@@ -1264,6 +1274,11 @@ local function slash(input)
         return
     end
     if cmd == "kouzla" or cmd == "seznam" then printBinds() return end
+    if cmd == "ladit" and rest == "kliky" then
+        M.debugClicks = not M.debugClicks
+        msg("zaznam kliknuti: " .. (M.debugClicks and "ZAPNUT - klikej na ramecky" or "vypnut"))
+        return
+    end
     if cmd == "ladit" then
         -- co má rámeček pod myší opravdu nastavené (pro hledání chyb)
         local found
