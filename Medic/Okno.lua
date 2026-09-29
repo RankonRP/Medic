@@ -586,13 +586,34 @@ createLookPage = function(page)
     stepper(18, -322, "Mana", function() return MedicDB.powerHeight or 4 end, 1, 2, 12, "%d",
         function(v) MedicDB.powerHeight = v; return true end)
     note(18, -350, "Šířku, výšku, měřítko a rozložení hra v boji měnit nedovolí. Ikonky a manu jde měnit kdykoli.", 660)
+
+    -- Testovací režim --------------------------------------------------------
+    heading(18, -378, "Testovací režim")
+    stepper(18, -404, "Hráčů", function() return MedicDB.previewSize or 40 end, 1, 1, 40, "%d", function(v)
+        MedicDB.previewSize = v
+        if M.PreviewCount() > 0 then M.Preview(v) end
+        return true
+    end)
+    local toggle = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+    toggle:SetSize(170, 24)
+    toggle:SetPoint("TOPLEFT", 258, -403)
+    czechButton(toggle)
+    local function toggleText() toggle:SetText(M.PreviewCount() > 0 and "Vypnout náhled" or "Zapnout náhled") end
+    toggle:SetScript("OnClick", function()
+        if M.PreviewCount() > 0 then M.Preview(0)
+        elseif InCombatLockdown() then M.Msg("v boji to nejde.")
+        else M.Preview(MedicDB.previewSize or 40) end
+        toggleText()
+    end)
+    h.refreshers[#h.refreshers + 1] = toggleText
+    note(440, -400, "Vymyšlená skupina jen na ukázku – změny nastavení uvidíš hned. V boji se sám vypne.", 250)
 end
 -------------------------------------------------------------------------------
 -- Okno
 -------------------------------------------------------------------------------
 local function createWindow()
     local w = LEFT + #COLUMNS * (CELL_W + GAP) + 12
-    local h = TOP + #ROWS * (CELL_H + GAP) + 216
+    local h = TOP + #ROWS * (CELL_H + GAP) + 236
     win = CreateFrame("Frame", "MedicOptions", UIParent, "BackdropTemplate")
     win:SetSize(w, h)
     win:SetPoint("CENTER")

@@ -218,11 +218,14 @@ local buttons = {}
 local wrapKeys   -- klávesy při najetí (definováno níž)
 local updateButton
 
-local function styleButton(btn)
+-- preview = obrázek pro testovací režim (obyčejný rámeček bez kouzel a bez hráče)
+local function styleButton(btn, preview)
     if btn.medic then return end
     btn.medic = true
-    buttons[#buttons + 1] = btn
-    btn:RegisterForClicks("AnyUp")
+    if not preview then
+        buttons[#buttons + 1] = btn
+        btn:RegisterForClicks("AnyUp")
+    end
 
     local bg = btn:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
@@ -396,6 +399,7 @@ local function styleButton(btn)
     buff:Hide()
     btn.buffIcon = buff
     M.LayoutHots(btn)   -- velikosti ikonek z nastavení
+    if preview then return end
 
     wrapKeys(btn)
     btn:HookScript("OnAttributeChanged", function(self, attr)
@@ -525,6 +529,7 @@ end
 function M.SetIconSize(what, s)
     MedicDB[what] = s
     for _, btn in ipairs(buttons) do M.LayoutHots(btn) end
+    if M.RefreshPreview then M.RefreshPreview() end
 end
 
 local function hotTime(f)
@@ -751,7 +756,7 @@ local function updateAll()
     end
 end
 
-M.UpdateAll = function() updateAll() end
+M.UpdateAll = function() updateAll(); if M.RefreshPreview then M.RefreshPreview() end end
 
 local function updateUnit(unit)
     for _, btn in ipairs(buttons) do
@@ -939,6 +944,7 @@ function M.ApplyGrid()
     header:SetAttribute("unitsPerColumn", per)
     for _, btn in ipairs(buttons) do btn:ClearAllPoints() end
     if shown then header:Show() end
+    M.RefreshPreview()
     return true
 end
 -- velikost a měřítko rámečků (jen mimo boj); vrací false, když to hra teď nedovolí
@@ -948,6 +954,7 @@ function M.SetLayout(w, h, s)
     anchor:SetWidth(w)
     anchor:SetScale(s)
     M.ApplyBindings()
+    M.RefreshPreview()
     return true
 end
 M.IsCustom = function(key)
@@ -1016,6 +1023,202 @@ local function createFrames()
 end
 
 -------------------------------------------------------------------------------
+-- Testovací režim: vymyšlená skupina (5/20/40) jen jako obrázek, pro nastavení vzhledu
+-------------------------------------------------------------------------------
+local PREVIEW_NAMES = {
+    "Thrall", "Jaina", "Uther", "Tyrande", "Rexxar", "Valeera", "Garrosh", "Anduin", "Malfurion", "Sylvanas",
+    "Varian", "Cairne", "Velen", "Illidan", "Muradin", "Baine", "Rokhan", "Alleria", "Magni", "Kael",
+    "Zuljin", "Vol'jin", "Genn", "Liadrin", "Rehgar", "Brann", "Moira", "Turalyon", "Khadgar", "Medivh",
+    "Hamuul", "Aerith", "Drek", "Saurfang", "Nazgrel", "Lorthemar", "Shandris", "Maiev", "Chen", "Lili",
+}
+local CLASSES_BY_ROLE = {
+    TANK = { "WARRIOR", "PALADIN", "DRUID", "WARRIOR" },
+    HEALER = { "PRIEST", "DRUID", "SHAMAN", "PALADIN" },
+    DAMAGER = { "MAGE", "ROGUE", "HUNTER", "WARLOCK", "WARRIOR", "SHAMAN", "PRIEST", "DRUID" },
+}
+local MANA_CLASSES = { PALADIN = true, PRIEST = true, DRUID = true, SHAMAN = true, MAGE = true, WARLOCK = true, HUNTER = true }
+local DEBUFF_TYPES = { "Magic", "Poison", "Disease", "Curse" }
+local previewFrames, previewCount = {}, 0
+
+local function previewData(n)
+    local tanks = n >= 20 and 4 or 1
+    local healers = math.max(1, math.floor(n / 5))
+    local list = {}
+    for i = 1, n do
+        local role = (i <= tanks) and "TANK" or (i <= tanks + healers) and "HEALER" or "DAMAGER"
+        local pool = CLASSES_BY_ROLE[role]
+        local d = {
+            name = PREVIEW_NAMES[i], role = role, class = pool[(i % #pool) + 1],
+            hp = math.max(0.12, ((i * 37) % 100) / 100), index = i,
+        }
+        if i % 7 == 0 then d.hp = 1 end
+        d.dead = (i == 6)
+        d.debuff = (i % 6 == 3) and DEBUFF_TYPES[(i % 4) + 1] or nil
+        d.hot = (i % 4 == 1)
+        d.heal = (i % 5 == 2)
+        d.absorb = (i % 9 == 4)
+        d.aggro = (i == 1)
+        d.targetOf = (i == 1)
+        d.target = (i == 3)
+        d.buffMissing = (i % 5 == 2)
+        list[#list + 1] = d
+    end
+    -- bez řazení podle rolí = promíchané pořadí jako ve skupině
+    if not MedicDB.sortRoles then
+        table.sort(list, function(a, b) return ((a.index * 13) % n) < ((b.index * 13) % n) end)
+    end
+    return list
+end
+
+local function fillPreview(btn, d)
+    local c = RAID_CLASS_COLORS[d.class] or { r = 0.5, g = 0.5, b = 0.5 }
+    btn.nameText:SetText(d.name)
+    btn.nameText:SetTextColor(d.dead and 0.6 or 1, d.dead and 0.6 or 1, d.dead and 0.6 or 1)
+    local coords = ROLE_COORDS[d.role]
+    if MedicDB.roleIcons and coords then
+        btn.roleIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-PORTRAITROLES")
+        btn.roleIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+        btn.roleIcon:Show()
+        btn.nameText:SetPoint("TOPLEFT", 17, -4)
+    else
+        btn.roleIcon:Hide()
+        btn.nameText:SetPoint("TOPLEFT", 4, -4)
+    end
+
+    local hp = d.dead and 0 or d.hp
+    btn.hp:SetMinMaxValues(0, 1)
+    btn.hp:SetValue(hp)
+    if MedicDB.colorMode == "class" then btn.hp:SetStatusBarColor(c.r, c.g, c.b)
+    elseif hp >= 0.5 then btn.hp:SetStatusBarColor((1 - hp) * 2, 0.85, 0.1)
+    else btn.hp:SetStatusBarColor(1, hp * 2 * 0.85, 0.1) end
+    btn.hpBg:SetColorTexture(d.dead and 0.25 or 0.15, d.dead and 0.05 or 0.15, d.dead and 0.05 or 0.15, 1)
+
+    btn.infoText:SetText("")
+    if d.dead then
+        btn.infoText:SetText("Mrtvý")
+        btn.infoText:SetTextColor(0.8, 0.3, 0.3)
+    elseif hp < 1 then
+        btn.infoText:SetText("-" .. math.floor((1 - hp) * 4000))
+        btn.infoText:SetTextColor(1, 0.4, 0.4)
+    end
+
+    btn.heal:SetWidth(math.max(btn.hp:GetWidth(), 1))
+    btn.heal:SetMinMaxValues(0, 1)
+    btn.heal:SetValue((d.heal and not d.dead) and 0.15 or 0)
+    btn.heal:Show()
+    btn.absorb:SetWidth(math.max(btn.hp:GetWidth(), 1))
+    btn.absorb:SetMinMaxValues(0, 1)
+    btn.absorb:SetValue(0.12)
+    btn.absorb:SetShown(MedicDB.absorbs and d.absorb and not d.dead or false)
+
+    btn.targetBorder:SetShown(MedicDB.targetHighlight and d.target)
+    btn.targetOfIcon:SetShown(MedicDB.targetOf and d.targetOf)
+    btn.rezIcon:SetShown(MedicDB.rezIcon and d.dead)
+
+    btn.aggro:SetShown(MedicDB.aggro and d.aggro and MedicDB.aggroStyle ~= "ramecek")
+    btn.aggroBorder:SetShown(MedicDB.aggro and d.aggro and MedicDB.aggroStyle == "ramecek")
+
+    local showDebuff = MedicDB.debuffs and d.debuff and not d.dead
+    if showDebuff then
+        local dc = (DebuffTypeColor and DebuffTypeColor[d.debuff]) or { r = 0.8, g = 0, b = 0.8 }
+        btn.border:SetBackdropBorderColor(dc.r, dc.g, dc.b, 1)
+        btn.border:Show()
+        if MedicDB.debuffBlink then
+            btn.flash:SetVertexColor(dc.r, dc.g, dc.b)
+            if not btn.pulse:IsPlaying() then btn.pulse:Play() end
+        end
+    else
+        btn.border:Hide()
+    end
+    if not (showDebuff and MedicDB.debuffBlink) and btn.pulse:IsPlaying() then btn.pulse:Stop(); btn.flash:SetAlpha(0) end
+    if showDebuff and MedicDB.debuffIcon then
+        btn.debuffIcon:SetTexture("Interface\\Icons\\Spell_Shadow_ShadowWordPain")
+        btn.debuffIcon:Show()
+    else
+        btn.debuffIcon:Hide()
+    end
+
+    local buffCfg = CLASS_BUFFS[playerClass] or CLASS_BUFFS.PRIEST
+    local buffShow = MedicDB.buffs and not d.dead
+    if MedicDB.buffMode == "present" then buffShow = buffShow and not d.buffMissing else buffShow = buffShow and d.buffMissing end
+    btn.buffIcon:SetTexture(spellIcon(buffCfg.spell) or "Interface\\Icons\\Spell_Nature_Regeneration")
+    btn.buffIcon:SetShown(buffShow or false)
+
+    for i, f in ipairs(btn.hotIcons) do
+        local show = MedicDB.hots and d.hot and not d.dead and i <= 2
+        if show then
+            f.icon:SetTexture(i == 1 and "Interface\\Icons\\Spell_Nature_Rejuvenation" or "Interface\\Icons\\Spell_Holy_Renew")
+            f.cd:SetCooldown(GetTime() - 3, 12)
+            f.cd:SetHideCountdownNumbers(true)
+            f.expires = GetTime() + 9
+            f.time:SetText("9")
+            f:Show()
+        else
+            f:Hide()
+            f.expires = nil
+        end
+    end
+
+    local mana = MedicDB.powerBar and MANA_CLASSES[d.class] and (not MedicDB.powerHealersOnly or d.role == "HEALER")
+    local ph = MedicDB.powerHeight or 4
+    if mana then
+        btn.power:SetHeight(ph)
+        btn.power:SetMinMaxValues(0, 1)
+        btn.power:SetValue(d.dead and 0 or 0.4 + ((d.index * 17) % 60) / 100)
+        btn.power:Show()
+    else
+        btn.power:Hide()
+    end
+    btn.hp:SetPoint("BOTTOMRIGHT", -2, mana and (3 + ph) or 2)
+    btn:SetAlpha(d.index == 9 and 0.4 or 1)   -- jeden „mimo dosah“
+end
+
+function M.RefreshPreview()
+    if previewCount == 0 then return end
+    local w, h = MedicDB.width, MedicDB.height
+    local per, sp = MedicDB.perRow or 5, MedicDB.spacing or 2
+    local list = previewData(previewCount)
+    for i, d in ipairs(list) do
+        local btn = previewFrames[i]
+        if not btn then
+            btn = CreateFrame("Button", nil, anchor)
+            styleButton(btn, true)
+            previewFrames[i] = btn
+        end
+        btn:SetSize(w, h)
+        M.LayoutHots(btn)
+        local k = i - 1
+        local col, row = math.floor(k / per), k % per
+        local x, y
+        if MedicDB.orientation == "vertical" then
+            x, y = col * (w + sp), -row * (h + sp)
+        else
+            x, y = row * (w + sp), -col * (h + sp)
+        end
+        btn:ClearAllPoints()
+        btn:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", x, y - 2)
+        btn:Show()
+        fillPreview(btn, d)
+    end
+    for i = #list + 1, #previewFrames do previewFrames[i]:Hide() end
+end
+
+-- n = počet vymyšlených hráčů (1–40), 0 = vypnout. Skutečné rámečky se jen zprůhlední
+-- (průhlednost jde měnit i v boji, schovat je v boji nejde).
+function M.Preview(n)
+    previewCount = math.max(0, math.min(40, n or 0))
+    if previewCount > 0 then
+        header:SetAlpha(0)
+        M.RefreshPreview()
+    else
+        for _, b in ipairs(previewFrames) do b:Hide() end
+        header:SetAlpha(1)
+    end
+    return true
+end
+M.PreviewCount = function() return previewCount end
+
+-------------------------------------------------------------------------------
 -- Příkazy /medic
 -------------------------------------------------------------------------------
 local function printBinds()
@@ -1061,6 +1264,13 @@ local function slash(input)
         return
     end
     if cmd == "kouzla" or cmd == "seznam" then printBinds() return end
+    if cmd == "test" or cmd == "nahled" then
+        local n = tonumber(rest) or (M.PreviewCount() > 0 and 0 or 40)
+        if n > 0 and InCombatLockdown() then msg("v boji to nejde.") return end
+        M.Preview(n)
+        msg(n > 0 and ("nahled: " .. n .. " hracu (vypnout: /medic test 0)") or "nahled vypnut.")
+        return
+    end
 
     local changesSecure = { klik = true, velikost = true, solo = true, reset = true }
     if changesSecure[cmd] and InCombatLockdown() then
@@ -1162,6 +1372,10 @@ ev:SetScript("OnEvent", function(_, event, arg1)
         return
     end
     if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" then
+        if event == "PLAYER_REGEN_DISABLED" and M.PreviewCount() > 0 then
+            M.Preview(0)   -- boj = zpátky skutečné rámečky
+            msg("boj - nahled vypnut.")
+        end
         if event == "PLAYER_REGEN_ENABLED" and pendingApply then M.ApplyBindings() end
         if event == "PLAYER_REGEN_ENABLED" then M.ApplySort(); M.WrapPending(); if M.gridPending then M.ApplyGrid() end end
         updateAll()   -- buff „jen mimo boj“
