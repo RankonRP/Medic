@@ -306,7 +306,7 @@ createIndicatorsPage = function(page)
         if cb.Text then cb.Text:SetText("") end
         local fs = text(page, fontNormal)
         fs:SetPoint("LEFT", cb, "RIGHT", 2, 0)
-        fs:SetWidth(195)
+        fs:SetWidth(212)
         fs:SetJustifyH("LEFT")
         fs:SetText(label)
         cb:SetScript("OnClick", function(self)
@@ -355,7 +355,8 @@ createIndicatorsPage = function(page)
     check(x, -74, "Zvýraznit debuffy, které umím odstranit", function() return MedicDB.debuffs end, function(v) MedicDB.debuffs = v end)
     check(x, -110, "Ukázat ikonku debuffu", function() return MedicDB.debuffIcon end, function(v) MedicDB.debuffIcon = v end)
     check(x, -136, "Ukazovat i ostatní debuffy", function() return MedicDB.debuffAll end, function(v) MedicDB.debuffAll = v end)
-    note(x + 4, -168, "Barva rámečku podle typu: magie modrá, kletba fialová, nemoc hnědá, jed zelená. Ostatní debuffy mají jen ikonku.")
+    check(x, -162, "Blikat, když jde debuff odstranit", function() return MedicDB.debuffBlink end, function(v) MedicDB.debuffBlink = v end)
+    note(x + 4, -194, "Barva rámečku podle typu: magie modrá, kletba fialová, nemoc hnědá, jed zelená. Ostatní debuffy mají jen ikonku.")
 
     -- Aggro ------------------------------------------------------------------
     x = 498
@@ -365,15 +366,26 @@ createIndicatorsPage = function(page)
     check(x, -126, "Celý rámeček červeně", function() return MedicDB.aggroStyle == "ramecek" end, function() MedicDB.aggroStyle = "ramecek" end)
     note(x + 4, -158, "Když hra hodnotu aggra skrývá (tajná hodnota), aggro se neukáže.")
 
+    -- Vzhled -----------------------------------------------------------------
+    heading(18, -236, "Vzhled")
+    check(18, -260, "Barva podle zdraví (jinak podle povolání)", function() return MedicDB.colorMode ~= "class" end,
+        function(v) MedicDB.colorMode = v and "hp" or "class" end)
+    check(18, -286, "Ikony rolí (tank, healer, dps)", function() return MedicDB.roleIcons end, function(v) MedicDB.roleIcons = v end)
+    check(258, -260, "Řadit: tank vlevo, pak healer, pak dps", function() return MedicDB.sortRoles end, function(v)
+        MedicDB.sortRoles = v
+        if not M.ApplySort() then M.Msg("v boji to hra nedovoli - projevi se po boji.") end
+    end)
+    check(258, -286, "Ikonky mých HoTů s odpočtem", function() return MedicDB.hots end, function(v) MedicDB.hots = v end)
+
     -- Velikost ---------------------------------------------------------------
-    heading(18, -236, "Velikost rámečků")
+    heading(18, -322, "Velikost rámečků")
     local function stepper(x2, label, get, step, min, max, fmt, apply)
         local l = text(page, fontNormal)
-        l:SetPoint("TOPLEFT", x2, -264)
+        l:SetPoint("TOPLEFT", x2, -350)
         l:SetText(label)
         local minus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
         minus:SetSize(26, 22)
-        minus:SetPoint("TOPLEFT", x2 + 62, -260)
+        minus:SetPoint("TOPLEFT", x2 + 62, -346)
         minus:SetText("-")
         local val = text(page, fontNormal, 1, 1, 1)
         val:SetPoint("LEFT", minus, "RIGHT", 4, 0)
@@ -405,7 +417,7 @@ end
 -------------------------------------------------------------------------------
 local function createWindow()
     local w = LEFT + #COLUMNS * (CELL_W + GAP) + 12
-    local h = TOP + #ROWS * (CELL_H + GAP) + 96
+    local h = TOP + #ROWS * (CELL_H + GAP) + 186
     win = CreateFrame("Frame", "MedicOptions", UIParent, "BackdropTemplate")
     win:SetSize(w, h)
     win:SetPoint("CENTER")

@@ -83,6 +83,19 @@ local DEFAULTS = {
     debuffAll = false,   -- ukázat ikonku i u ostatních debuffů
     aggro = true,
     aggroStyle = "pruh", -- "pruh" = proužek nahoře, "ramecek" = celý rámeček červeně
+    debuffBlink = true,  -- rámeček bliká, když jde debuff odstranit
+    colorMode = "hp",    -- "hp" = zelená/žlutá/červená podle zdraví, "class" = barva povolání
+    roleIcons = true,    -- ikonka role (tank, healer, dps)
+    sortRoles = true,    -- řadit tank -> healer -> dps zleva doprava
+    hots = true,         -- ikonky mých HoTů s odpočtem
+}
+
+-- HoTy a štíty, které se ukazují v rámečku (když hra názvy aur neskrývá; jinak všechny krátké moje buffy)
+local HOTS = {
+    ["Rejuvenation"] = true, ["Regrowth"] = true, ["Lifebloom"] = true, ["Wild Growth"] = true,
+    ["Renew"] = true, ["Power Word: Shield"] = true, ["Prayer of Mending"] = true,
+    ["Earth Shield"] = true, ["Riptide"] = true, ["Healing Stream"] = true,
+    ["Beacon of Light"] = true, ["Sacred Shield"] = true,
 }
 
 local MODS = { "", "alt-", "ctrl-", "shift-", "alt-ctrl-", "alt-shift-", "ctrl-shift-", "alt-ctrl-shift-" }
@@ -117,19 +130,21 @@ local function spellIcon(name)
 end
 
 -- Projde aury jednotky (moderní i starší API)
+-- fn(name, icon, dispelName, source, aura) – aura = celá tabulka (duration, expirationTime, auraInstanceID…)
 local function forEachAura(unit, filter, fn)
     for i = 1, 40 do
-        local name, icon, dispelName, source
+        local name, icon, dispelName, source, aura
         if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
             local a = C_UnitAuras.GetAuraDataByIndex(unit, i, filter)
             if not a then return end
-            name, icon, dispelName, source = a.name, a.icon, a.dispelName, a.sourceUnit
+            name, icon, dispelName, source, aura = a.name, a.icon, a.dispelName, a.sourceUnit, a
         else
-            local n, ic, _, dtype, _, _, src = UnitAura(unit, i, filter)
+            local n, ic, _, dtype, dur, exp, src = UnitAura(unit, i, filter)
             if not n then return end
             name, icon, dispelName, source = n, ic, dtype, src
+            aura = { name = n, icon = ic, duration = dur, expirationTime = exp }
         end
-        if fn(name, icon, dispelName, source) then return end
+        if fn(name, icon, dispelName, source, aura) then return end
     end
 end
 
@@ -235,8 +250,14 @@ local function styleButton(btn)
     name:SetWordWrap(false)
     btn.nameText = name
 
+    local role = overlay:CreateTexture(nil, "OVERLAY")
+    role:SetSize(12, 12)
+    role:SetPoint("TOPLEFT", 3, -3)
+    role:Hide()
+    btn.roleIcon = role
+
     local info = overlay:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    info:SetPoint("BOTTOMRIGHT", -4, 4)
+    info:SetPoint("RIGHT", -4, 1)
     info:SetFont(FONT, 10, "")
     info:SetShadowOffset(1, -1)
     info:SetJustifyH("RIGHT")
@@ -266,6 +287,39 @@ local function styleButton(btn)
     border:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
     border:Hide()
     btn.border = border
+
+    -- blikání při debuffu: barevný závoj přes celý rámeček
+    local flash = overlay:CreateTexture(nil, "ARTWORK")
+    flash:SetAllPoints(hp)
+    flash:SetColorTexture(1, 1, 1, 1)
+    flash:SetAlpha(0)
+    local pulse = flash:CreateAnimationGroup()
+    pulse:SetLooping("BOUNCE")
+    local a = pulse:CreateAnimation("Alpha")
+    a:SetFromAlpha(0)
+    a:SetToAlpha(0.45)
+    a:SetDuration(0.45)
+    btn.flash, btn.pulse = flash, pulse
+
+    -- ikonky mých HoTů s odpočtem (vpravo dole, řadí se doleva)
+    btn.hotIcons = {}
+    for i = 1, 3 do
+        local f = CreateFrame("Frame", nil, overlay)
+        f:SetSize(15, 15)
+        f:SetPoint("BOTTOMRIGHT", -3 - (i - 1) * 16, 3)
+        f.icon = f:CreateTexture(nil, "ARTWORK")
+        f.icon:SetAllPoints()
+        f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        f.cd = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+        f.cd:SetAllPoints()
+        f.cd:SetReverse(true)
+        f.cd:SetDrawEdge(false)
+        f.time = f:CreateFontString(nil, "OVERLAY")
+        f.time:SetFont(FONT, 9, "OUTLINE")
+        f.time:SetPoint("CENTER", 0, 0)
+        f:Hide()
+        btn.hotIcons[i] = f
+    end
 
     local debuffIcon = overlay:CreateTexture(nil, "OVERLAY")
     debuffIcon:SetSize(14, 14)
@@ -335,6 +389,78 @@ end
 local function secret(v) return issecretvalue ~= nil and issecretvalue(v) or false end
 local function flag(v) if secret(v) then return false end return v and true or false end
 
+-- Souřadnice ikon rolí v textuře UI-LFG-ICON-PORTRAITROLES
+local ROLE_COORDS = {
+    TANK = { 0, 19 / 64, 22 / 64, 41 / 64 },
+    HEALER = { 20 / 64, 39 / 64, 1 / 64, 20 / 64 },
+    DAMAGER = { 20 / 64, 39 / 64, 22 / 64, 41 / 64 },
+}
+
+-- Barva zdraví: zelená -> žlutá -> červená. U tajných hodnot to spočítá hra sama (křivka barev),
+-- když to neumí, zůstane barva povolání.
+local hpCurve
+local function setHealthColor(btn, unit, hp, maxHp, classColor)
+    if MedicDB.colorMode == "class" then
+        btn.hp:SetStatusBarColor(classColor.r, classColor.g, classColor.b)
+        return
+    end
+    if not secret(hp) and not secret(maxHp) then
+        local p = maxHp > 0 and hp / maxHp or 0
+        if p >= 0.5 then btn.hp:SetStatusBarColor((1 - p) * 2, 0.85, 0.1)
+        else btn.hp:SetStatusBarColor(1, p * 2 * 0.85, 0.1) end
+        return
+    end
+    local ok = pcall(function()
+        if not hpCurve then
+            hpCurve = C_CurveUtil.CreateColorCurve()
+            hpCurve:AddPoint(0, CreateColor(1, 0, 0.1))
+            hpCurve:AddPoint(0.5, CreateColor(1, 0.85, 0.1))
+            hpCurve:AddPoint(1, CreateColor(0.1, 0.85, 0.1))
+        end
+        local col = UnitHealthPercent(unit, false, hpCurve)
+        btn.hp:GetStatusBarTexture():SetVertexColor(col:GetRGB())
+    end)
+    if not ok then btn.hp:SetStatusBarColor(classColor.r, classColor.g, classColor.b) end
+end
+
+-- Ikonky mých HoTů s odpočtem
+local function hotTime(f)
+    if not f.expires then f.time:SetText("") return end
+    local left = f.expires - GetTime()
+    if left <= 0 then f.time:SetText("") return end
+    f.time:SetText(left >= 10 and ("%d"):format(left) or ("%.0f"):format(left))
+end
+
+local function updateHots(btn, unit, hide)
+    local n = 0
+    if MedicDB.hots and not hide then
+        forEachAura(unit, "HELPFUL|PLAYER", function(name, icon, _, _, a)
+            -- jen HoTy/štíty: podle názvu, a když je název tajný, podle krátkého trvání
+            if not secret(name) and name and not HOTS[name] then
+                if secret(a.duration) or not a.duration or a.duration == 0 or a.duration > 60 then return end
+            end
+            if secret(name) and not secret(a.duration) and (not a.duration or a.duration == 0 or a.duration > 60) then return end
+            n = n + 1
+            local f = btn.hotIcons[n]
+            f.icon:SetTexture(icon)
+            f.expires = nil
+            if not secret(a.expirationTime) and not secret(a.duration) and a.duration and a.duration > 0 then
+                f.cd:SetCooldown(a.expirationTime - a.duration, a.duration)
+                f.cd:SetHideCountdownNumbers(true)
+                f.expires = a.expirationTime
+            else
+                -- tajný čas: odpočet vykreslí hra sama (čísla na cooldownu)
+                f.cd:SetHideCountdownNumbers(false)
+                pcall(function() f.cd:SetCooldownFromDurationObject(C_UnitAuras.GetAuraDuration(unit, a.auraInstanceID)) end)
+            end
+            hotTime(f)
+            f:Show()
+            return n >= #btn.hotIcons
+        end)
+    end
+    for i = n + 1, #btn.hotIcons do btn.hotIcons[i]:Hide(); btn.hotIcons[i].expires = nil end
+end
+
 local function updateRange(btn, unit)
     if UnitIsUnit(unit, "player") or not UnitInRange then btn:SetAlpha(1) return end
     local r, checked = UnitInRange(unit)
@@ -355,6 +481,20 @@ function updateButton(btn)
     btn.nameText:SetText(UnitName(unit) or "")
     btn.nameText:SetTextColor(1, 1, 1)
 
+    -- role (tank, healer, dps)
+    local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(unit)
+    if secret(role) then role = nil end
+    local coords = role and ROLE_COORDS[role]
+    if MedicDB.roleIcons and coords then
+        btn.roleIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-PORTRAITROLES")
+        btn.roleIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+        btn.roleIcon:Show()
+        btn.nameText:SetPoint("TOPLEFT", 17, -4)
+    else
+        btn.roleIcon:Hide()
+        btn.nameText:SetPoint("TOPLEFT", 4, -4)
+    end
+
     -- zdraví: hodnoty rovnou do ukazatele (funguje i s tajnými hodnotami)
     local hp, maxHp = UnitHealth(unit), UnitHealthMax(unit)
     btn.hp:SetMinMaxValues(0, maxHp)
@@ -372,7 +512,7 @@ function updateButton(btn)
         btn.infoText:SetText("Mrtvý")
         btn.infoText:SetTextColor(0.8, 0.3, 0.3)
     else
-        btn.hp:SetStatusBarColor(c.r, c.g, c.b)
+        setHealthColor(btn, unit, hp, maxHp, c)
         -- chybějící HP jde spočítat jen u netajných hodnot
         if not secret(hp) and not secret(maxHp) then
             local deficit = maxHp - hp
@@ -421,9 +561,19 @@ function updateButton(btn)
         local dc = (dispelType and DebuffTypeColor and DebuffTypeColor[dispelType]) or { r = 0.8, g = 0, b = 0.8 }
         btn.border:SetBackdropBorderColor(dc.r, dc.g, dc.b, 1)
         btn.border:Show()
+        if MedicDB.debuffBlink then
+            btn.flash:SetVertexColor(dc.r, dc.g, dc.b)
+            if not btn.pulse:IsPlaying() then btn.pulse:Play() end
+        end
     else
         btn.border:Hide()
     end
+    if not (found and MedicDB.debuffBlink) and btn.pulse:IsPlaying() then
+        btn.pulse:Stop()
+        btn.flash:SetAlpha(0)
+    end
+
+    updateHots(btn, unit, dead or offline)
     local shownIcon = (found and MedicDB.debuffIcon and dispelIcon) or otherIcon
     if shownIcon then
         btn.debuffIcon:SetTexture(shownIcon)
@@ -532,6 +682,20 @@ M.SpellIcon = spellIcon
 M.KeyLabel = keyLabel
 M.Msg = msg
 M.Class = playerClass
+-- řazení: tank -> healer -> dps (hlavička hry řadí podle role přidělené ve skupině)
+function M.ApplySort()
+    if not header or InCombatLockdown() then return false end
+    if MedicDB.sortRoles then
+        header:SetAttribute("groupBy", "ASSIGNEDROLE")
+        header:SetAttribute("groupingOrder", "TANK,HEALER,DAMAGER,NONE")
+    else
+        header:SetAttribute("groupBy", "GROUP")
+        header:SetAttribute("groupingOrder", "1,2,3,4,5,6,7,8")
+    end
+    header:SetAttribute("sortMethod", "INDEX")
+    return true
+end
+
 -- velikost a měřítko rámečků (jen mimo boj); vrací false, když to hra teď nedovolí
 function M.SetLayout(w, h, s)
     if InCombatLockdown() then return false end
@@ -598,15 +762,14 @@ local function createFrames()
     header:SetAttribute("showParty", true)
     header:SetAttribute("showRaid", true)
     header:SetAttribute("showSolo", MedicDB.showSolo)
-    header:SetAttribute("groupBy", "GROUP")
-    header:SetAttribute("groupingOrder", "1,2,3,4,5,6,7,8")
-    header:SetAttribute("sortMethod", "INDEX")
-    header:SetAttribute("point", "TOP")
-    header:SetAttribute("yOffset", -2)
+    M.ApplySort()
+    -- rámečky vedle sebe (zleva doprava), další řada pod nimi
+    header:SetAttribute("point", "LEFT")
+    header:SetAttribute("xOffset", 2)
     header:SetAttribute("maxColumns", 8)
     header:SetAttribute("unitsPerColumn", 5)
     header:SetAttribute("columnSpacing", 2)
-    header:SetAttribute("columnAnchorPoint", "LEFT")
+    header:SetAttribute("columnAnchorPoint", "TOP")
     header:SetAttribute("initialConfigFunction", buildSnippet(effectiveBinds()))
     header:Show()
 
@@ -759,6 +922,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     end
     if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" then
         if event == "PLAYER_REGEN_ENABLED" and pendingApply then M.ApplyBindings() end
+        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort() end
         updateAll()   -- buff „jen mimo boj“
         return
     end
@@ -780,6 +944,7 @@ C_Timer.NewTicker(0.25, function()
         if btn:IsVisible() then
             local unit = btn:GetAttribute("unit")
             if unit and UnitExists(unit) then updateRange(btn, unit) end
+            for _, f in ipairs(btn.hotIcons) do if f:IsShown() then hotTime(f) end end
         end
     end
 end)

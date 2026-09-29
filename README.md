@@ -5,6 +5,12 @@ Rámečky skupiny a raidu pro WoW: Forever s léčením na kliknutí myši (podo
 - kouzla na tlačítka myši (i se Shift/Ctrl/Alt), výchozí podle povolání (paladin, kněz, druid, šaman)
 - zvýraznění debuffů, které umíš odstranit
 - příchozí léčení, aggro, dosah
+- řazení podle role (tank vlevo, healer, dps), ikony rolí
+- ikonky tvých HoTů s odpočtem, barva podle zdraví, blikání při debuffu
 - hlídání chybějícího buffu (Blessing, Fortitude, Arcane Intellect, Mark of the Wild)
 
 Ve hře napiš `/medic` pro seznam příkazů.
+
+## Instalace
+
+Code → Download ZIP, rozbal a složku `Medic` (tu uvnitř, s `Medic.toc`) zkopíruj do `World of Warcraft\_classic_beta_\Interface\AddOns\`. Pak restartuj hru.
