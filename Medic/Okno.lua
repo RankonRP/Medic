@@ -55,7 +55,7 @@ local ROWS = {
     { mod = "alt-", label = "Alt" },
 }
 local CELL_W, CELL_H, GAP = 118, 46, 4
-local LEFT, TOP = 96, 70
+local LEFT, TOP = 96, 90
 
 local BACKDROP = {
     bgFile = "Interface\\Buttons\\WHITE8x8",
@@ -64,6 +64,7 @@ local BACKDROP = {
 }
 
 local win, cells, chooser, typer = nil, {}, nil, nil
+local createIndicatorsPage
 
 local function text(parent, font, r, g, b)
     local fs = parent:CreateFontString(nil, "OVERLAY")
@@ -274,11 +275,137 @@ function refresh()
 end
 
 -------------------------------------------------------------------------------
+-- Záložka „Ukazatele a velikost“: buffy, debuffy, aggro, velikost rámečků
+-------------------------------------------------------------------------------
+createIndicatorsPage = function(page)
+    local refreshers = {}
+    page.refresh = function() for _, fn in ipairs(refreshers) do fn() end end
+
+    local bg = page:CreateTexture(nil, "BACKGROUND")
+    bg:SetPoint("TOPLEFT", 8, -40)
+    bg:SetPoint("BOTTOMRIGHT", -8, 44)
+    bg:SetColorTexture(1, 1, 1, 0.03)
+
+    local function heading(x, y, label)
+        local fs = text(page, fontTitle, 1, 0.82, 0)
+        fs:SetPoint("TOPLEFT", x, y)
+        fs:SetText(label)
+    end
+    local function note(x, y, label, width)
+        local fs = text(page, fontSmall, 0.65, 0.65, 0.65)
+        fs:SetPoint("TOPLEFT", x, y)
+        fs:SetWidth(width or 215)
+        fs:SetJustifyH("LEFT")
+        fs:SetText(label)
+        return fs
+    end
+    local function check(x, y, label, get, set)
+        local cb = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+        cb:SetSize(24, 24)
+        cb:SetPoint("TOPLEFT", x, y)
+        if cb.Text then cb.Text:SetText("") end
+        local fs = text(page, fontNormal)
+        fs:SetPoint("LEFT", cb, "RIGHT", 2, 0)
+        fs:SetWidth(195)
+        fs:SetJustifyH("LEFT")
+        fs:SetText(label)
+        cb:SetScript("OnClick", function(self)
+            set(self:GetChecked() and true or false)
+            M.UpdateAll()
+            page.refresh()
+        end)
+        refreshers[#refreshers + 1] = function() cb:SetChecked(get() and true or false) end
+        return cb
+    end
+
+    -- Buffy ------------------------------------------------------------------
+    local x = 18
+    heading(x, -50, "Buffy")
+    check(x, -74, "Hlídat chybějící buff", function() return MedicDB.buffs end, function(v) MedicDB.buffs = v end)
+    check(x, -100, "Jen mimo boj", function() return MedicDB.buffOOC end, function(v) MedicDB.buffOOC = v end)
+    check(x, -126, "Jen buff ode mě", function()
+        local c = M.BuffConfig()
+        return c and c.mine
+    end, function(v) MedicDB.buffMine[M.Class] = v end)
+    local lbl = text(page, fontNormal)
+    lbl:SetPoint("TOPLEFT", x + 4, -158)
+    lbl:SetText("Hlídané buffy:")
+    local eb = CreateFrame("EditBox", nil, page, "InputBoxTemplate")
+    eb:SetSize(205, 22)
+    eb:SetPoint("TOPLEFT", x + 8, -176)
+    eb:SetAutoFocus(false)
+    local function saveBuffs()
+        MedicDB.buffNames[M.Class] = eb:GetText()
+        M.UpdateAll()
+        page.refresh()
+    end
+    eb:SetScript("OnEnterPressed", function(self) saveBuffs(); self:ClearFocus() end)
+    eb:SetScript("OnEditFocusLost", saveBuffs)
+    eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    local hint = note(x + 4, -202, "")
+    refreshers[#refreshers + 1] = function()
+        if not eb:HasFocus() then eb:SetText(MedicDB.buffNames[M.Class] or "") end
+        local def = M.BuffDefaultText()
+        hint:SetText("Víc buffů odděl čárkou, anglicky. Prázdné = výchozí" .. (def and (": " .. def) or " (tvé povolání žádný nemá)") .. ".")
+    end
+
+    -- Debuffy ----------------------------------------------------------------
+    x = 258
+    heading(x, -50, "Debuffy")
+    check(x, -74, "Zvýraznit debuffy, které umím odstranit", function() return MedicDB.debuffs end, function(v) MedicDB.debuffs = v end)
+    check(x, -110, "Ukázat ikonku debuffu", function() return MedicDB.debuffIcon end, function(v) MedicDB.debuffIcon = v end)
+    check(x, -136, "Ukazovat i ostatní debuffy", function() return MedicDB.debuffAll end, function(v) MedicDB.debuffAll = v end)
+    note(x + 4, -168, "Barva rámečku podle typu: magie modrá, kletba fialová, nemoc hnědá, jed zelená. Ostatní debuffy mají jen ikonku.")
+
+    -- Aggro ------------------------------------------------------------------
+    x = 498
+    heading(x, -50, "Aggro")
+    check(x, -74, "Ukazovat aggro", function() return MedicDB.aggro end, function(v) MedicDB.aggro = v end)
+    check(x, -100, "Proužek nahoře", function() return MedicDB.aggroStyle ~= "ramecek" end, function() MedicDB.aggroStyle = "pruh" end)
+    check(x, -126, "Celý rámeček červeně", function() return MedicDB.aggroStyle == "ramecek" end, function() MedicDB.aggroStyle = "ramecek" end)
+    note(x + 4, -158, "Když hra hodnotu aggra skrývá (tajná hodnota), aggro se neukáže.")
+
+    -- Velikost ---------------------------------------------------------------
+    heading(18, -236, "Velikost rámečků")
+    local function stepper(x2, label, get, step, min, max, fmt, apply)
+        local l = text(page, fontNormal)
+        l:SetPoint("TOPLEFT", x2, -264)
+        l:SetText(label)
+        local minus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+        minus:SetSize(26, 22)
+        minus:SetPoint("TOPLEFT", x2 + 62, -260)
+        minus:SetText("-")
+        local val = text(page, fontNormal, 1, 1, 1)
+        val:SetPoint("LEFT", minus, "RIGHT", 4, 0)
+        val:SetWidth(40)
+        local plus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+        plus:SetSize(26, 22)
+        plus:SetPoint("LEFT", val, "RIGHT", 4, 0)
+        plus:SetText("+")
+        local function change(d)
+            local v = math.floor((get() + d) / step + 0.5) * step
+            v = math.max(min, math.min(max, v))
+            if not apply(v) then M.Msg("v boji to hra nedovoli - zkus to po boji.") end
+            page.refresh()
+        end
+        minus:SetScript("OnClick", function() change(-step) end)
+        plus:SetScript("OnClick", function() change(step) end)
+        refreshers[#refreshers + 1] = function() val:SetText(fmt:format(get())) end
+    end
+    stepper(22, "Šířka", function() return MedicDB.width end, 5, 50, 200, "%d",
+        function(v) return M.SetLayout(v, MedicDB.height, MedicDB.scale) end)
+    stepper(222, "Výška", function() return MedicDB.height end, 2, 20, 80, "%d",
+        function(v) return M.SetLayout(MedicDB.width, v, MedicDB.scale) end)
+    stepper(422, "Měřítko", function() return MedicDB.scale end, 0.1, 0.5, 2, "%.1f",
+        function(v) return M.SetLayout(MedicDB.width, MedicDB.height, v) end)
+end
+
+-------------------------------------------------------------------------------
 -- Okno
 -------------------------------------------------------------------------------
 local function createWindow()
     local w = LEFT + #COLUMNS * (CELL_W + GAP) + 12
-    local h = TOP + #ROWS * (CELL_H + GAP) + 76
+    local h = TOP + #ROWS * (CELL_H + GAP) + 96
     win = CreateFrame("Frame", "MedicOptions", UIParent, "BackdropTemplate")
     win:SetSize(w, h)
     win:SetPoint("CENTER")
@@ -301,39 +428,68 @@ local function createWindow()
     local className = UnitClass("player")
     local title = text(win, fontTitle, 0.4, 1, 0.6)
     title:SetPoint("TOPLEFT", 14, -12)
-    title:SetText("Medic – kouzla na myši (" .. (className or "") .. ")")
-
-    local sub = text(win, fontSmall, 0.75, 0.75, 0.75)
-    sub:SetPoint("TOPLEFT", 14, -34)
-    sub:SetText("Přetáhni kouzlo ze spellbooku (P) na políčko. Každé povolání má vlastní nastavení.")
+    title:SetText("Medic (" .. (className or "") .. ")")
 
     local close = CreateFrame("Button", nil, win, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", 2, 2)
 
+    -- záložky
+    local page1 = CreateFrame("Frame", nil, win)
+    page1:SetAllPoints()
+    local page2 = CreateFrame("Frame", nil, win)
+    page2:SetAllPoints()
+    page2:Hide()
+    createIndicatorsPage(page2)
+    local tab1 = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+    tab1:SetSize(150, 24)
+
+    czechButton(tab1)
+    tab1:SetText("Kouzla na myši")
+    local tab2 = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+    tab2:SetSize(190, 24)
+    czechButton(tab2)
+    tab2:SetText("Ukazatele a velikost")
+    tab2:SetPoint("TOPRIGHT", -34, -8)
+    tab1:SetPoint("RIGHT", tab2, "LEFT", -6, 0)
+    local function showPage(n)
+        page1:SetShown(n == 1)
+        page2:SetShown(n == 2)
+        tab1:SetEnabled(n ~= 1)
+        tab2:SetEnabled(n ~= 2)
+        if n == 2 and page2.refresh then page2.refresh() end
+    end
+    tab1:SetScript("OnClick", function() showPage(1) end)
+    tab2:SetScript("OnClick", function() showPage(2) end)
+    showPage(1)
+
+    local sub = text(page1, fontSmall, 0.75, 0.75, 0.75)
+    sub:SetPoint("TOPLEFT", 14, -40)
+    sub:SetText("Přetáhni kouzlo ze spellbooku (P) na políčko. Každé povolání má vlastní nastavení.")
+
     for c, col in ipairs(COLUMNS) do
-        local fs = text(win, fontNormal, 1, 0.82, 0)
+        local fs = text(page1, fontNormal, 1, 0.82, 0)
         fs:SetPoint("BOTTOM", win, "TOPLEFT", LEFT + (c - 1) * (CELL_W + GAP) + CELL_W / 2, -TOP + 4)
         fs:SetText(col.label)
     end
     for r, row in ipairs(ROWS) do
-        local fs = text(win, fontNormal, 1, 0.82, 0)
+        local fs = text(page1, fontNormal, 1, 0.82, 0)
         fs:SetPoint("RIGHT", win, "TOPLEFT", LEFT - 8, -TOP - (r - 1) * (CELL_H + GAP) - CELL_H / 2)
         fs:SetText(row.label)
         for c, col in ipairs(COLUMNS) do
             local key = row.mod .. col.btn
-            local cell = createCell(win, key)
+            local cell = createCell(page1, key)
             cell.label = (row.mod == "" and "" or (row.label .. " + ")) .. col.label .. " tlačítko"
-            cell:SetPoint("TOPLEFT", LEFT + (c - 1) * (CELL_W + GAP), -TOP - (r - 1) * (CELL_H + GAP))
+            cell:SetPoint("TOPLEFT", win, "TOPLEFT", LEFT + (c - 1) * (CELL_W + GAP), -TOP - (r - 1) * (CELL_H + GAP))
             cells[key] = cell
         end
     end
 
-    local legend = text(win, fontSmall, 0.7, 0.7, 0.7)
+    local legend = text(page1, fontSmall, 0.7, 0.7, 0.7)
     legend:SetPoint("BOTTOMLEFT", 14, 44)
     legend:SetText("Zlatý rámeček = nastavil sis sám, šedý = výchozí. Šedé kouzlo = zatím ho neumíš.\nPravé tlačítko = smazat, levé = další možnosti. Změny v boji se projeví po boji.")
     legend:SetJustifyH("LEFT")
 
-    local reset = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+    local reset = CreateFrame("Button", nil, page1, "UIPanelButtonTemplate")
     reset:SetSize(170, 24)
     reset:SetPoint("BOTTOMLEFT", 12, 12)
     reset:SetText("Vše výchozí")

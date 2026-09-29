@@ -74,7 +74,15 @@ local DEFAULTS = {
     locked = false,
     classBinds = {},   -- ruční přiřazení hráče podle povolání: classBinds.DRUID["shift-1"] = "Remove Curse"
     showSolo = true,
-    buffs = true,
+    buffs = true,        -- hlídat chybějící buff
+    buffOOC = false,     -- ikonku buffu ukazovat jen mimo boj
+    buffNames = {},      -- vlastní hlídané buffy podle povolání: buffNames.PRIEST = "Power Word: Fortitude, Prayer of Fortitude"
+    buffMine = {},       -- jen buff ode mě podle povolání (nil = výchozí povolání)
+    debuffs = true,      -- zvýraznit debuffy, které umím odstranit
+    debuffIcon = true,   -- ikonka debuffu v rohu
+    debuffAll = false,   -- ukázat ikonku i u ostatních debuffů
+    aggro = true,
+    aggroStyle = "pruh", -- "pruh" = proužek nahoře, "ramecek" = celý rámeček červeně
 }
 
 local MODS = { "", "alt-", "ctrl-", "shift-", "alt-ctrl-", "alt-shift-", "ctrl-shift-", "alt-ctrl-shift-" }
@@ -243,6 +251,14 @@ local function styleButton(btn)
     aggro:Hide()
     btn.aggro = aggro
 
+    local aggroBorder = CreateFrame("Frame", nil, btn, "BackdropTemplate")
+    aggroBorder:SetPoint("TOPLEFT", -2, 2)
+    aggroBorder:SetPoint("BOTTOMRIGHT", 2, -2)
+    aggroBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
+    aggroBorder:SetBackdropBorderColor(1, 0.1, 0.1, 1)
+    aggroBorder:Hide()
+    btn.aggroBorder = aggroBorder
+
     -- debuff, který umíš odstranit: barevný rámeček (barva podle typu – magie, jed, nemoc, kletba)
     local border = CreateFrame("Frame", nil, btn, "BackdropTemplate")
     border:SetAllPoints()
@@ -276,6 +292,38 @@ local function styleButton(btn)
         GameTooltip:Show()
     end)
     btn:HookScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+-------------------------------------------------------------------------------
+-- Hlídaný buff: vlastní seznam z nastavení, jinak výchozí podle povolání
+-------------------------------------------------------------------------------
+function M.BuffConfig()
+    local def = CLASS_BUFFS[playerClass]
+    local custom = MedicDB.buffNames[playerClass]
+    local cfg
+    if custom and custom:find("%S") then
+        cfg = { names = {}, custom = true }
+        for name in custom:gmatch("[^,]+") do
+            name = name:gsub("^%s+", ""):gsub("%s+$", "")
+            if name ~= "" then cfg.names[#cfg.names + 1] = name end
+        end
+        cfg.spell = cfg.names[1]
+        cfg.mine = false
+    elseif def then
+        cfg = { names = def.names, prefix = def.prefix, mine = def.mine, spell = def.spell }
+    else
+        return nil
+    end
+    local mine = MedicDB.buffMine[playerClass]
+    if mine ~= nil then cfg.mine = mine end
+    return cfg
+end
+function M.BuffDefaultText()
+    local def = CLASS_BUFFS[playerClass]
+    if not def then return nil end
+    local list = {}
+    for _, n in ipairs(def.names) do list[#list + 1] = def.prefix and (n .. "…") or n end
+    return table.concat(list, ", ")
 end
 
 -------------------------------------------------------------------------------
@@ -348,11 +396,13 @@ function updateButton(btn)
 
     -- aggro (tajnou hodnotu porovnat nejde -> nezobrazit)
     local threat = UnitThreatSituation and UnitThreatSituation(unit)
-    btn.aggro:SetShown(not secret(threat) and threat ~= nil and threat >= 2)
+    local hasAggro = MedicDB.aggro and not secret(threat) and threat ~= nil and threat >= 2
+    btn.aggro:SetShown(hasAggro and MedicDB.aggroStyle ~= "ramecek")
+    btn.aggroBorder:SetShown(hasAggro and MedicDB.aggroStyle == "ramecek")
 
     -- debuff, který umím odstranit
     local found, dispelType, dispelIcon = false, nil, nil
-    if not dead then
+    if not dead and MedicDB.debuffs then
         for _, filter in ipairs({ "HARMFUL|RAID_PLAYER_DISPELLABLE", "HARMFUL|RAID" }) do
             forEachAura(unit, filter, function(_, icon, dtype)
                 found, dispelIcon = true, icon
@@ -362,21 +412,31 @@ function updateButton(btn)
             if found then break end
         end
     end
+    -- ostatní debuffy (nejdou odstranit): jen ikonka, bez rámečku
+    local otherIcon
+    if not found and not dead and MedicDB.debuffAll then
+        forEachAura(unit, "HARMFUL", function(_, icon) otherIcon = icon return true end)
+    end
     if found then
         local dc = (dispelType and DebuffTypeColor and DebuffTypeColor[dispelType]) or { r = 0.8, g = 0, b = 0.8 }
         btn.border:SetBackdropBorderColor(dc.r, dc.g, dc.b, 1)
         btn.border:Show()
-        btn.debuffIcon:SetTexture(dispelIcon)
-        btn.debuffIcon:Show()
     else
         btn.border:Hide()
+    end
+    local shownIcon = (found and MedicDB.debuffIcon and dispelIcon) or otherIcon
+    if shownIcon then
+        btn.debuffIcon:SetTexture(shownIcon)
+        btn.debuffIcon:Show()
+    else
         btn.debuffIcon:Hide()
     end
 
     -- chybějící buff (když jsou názvy aur tajné, stav se nemění)
-    local cfg = MedicDB.buffs and CLASS_BUFFS[playerClass]
+    local cfg = MedicDB.buffs and M.BuffConfig()
     local missing, unknown = false, false
-    if cfg and not dead and not offline and knowsSpell(cfg.spell) then
+    if MedicDB.buffOOC and InCombatLockdown() then cfg = nil end
+    if cfg and not dead and not offline and (cfg.custom or knowsSpell(cfg.spell)) then
         missing = true
         forEachAura(unit, "HELPFUL", function(name, _, _, source)
             if secret(name) or secret(source) then unknown = true return true end
@@ -403,6 +463,8 @@ local function updateAll()
         if btn:IsVisible() then updateButton(btn) end
     end
 end
+
+M.UpdateAll = function() updateAll() end
 
 local function updateUnit(unit)
     for _, btn in ipairs(buttons) do
@@ -470,6 +532,15 @@ M.SpellIcon = spellIcon
 M.KeyLabel = keyLabel
 M.Msg = msg
 M.Class = playerClass
+-- velikost a měřítko rámečků (jen mimo boj); vrací false, když to hra teď nedovolí
+function M.SetLayout(w, h, s)
+    if InCombatLockdown() then return false end
+    MedicDB.width, MedicDB.height, MedicDB.scale = w, h, s
+    anchor:SetWidth(w)
+    anchor:SetScale(s)
+    M.ApplyBindings()
+    return true
+end
 M.IsCustom = function(key)
     local t = MedicDB.classBinds[playerClass]
     return t ~= nil and t[key] ~= nil
@@ -679,15 +750,16 @@ ev:SetScript("OnEvent", function(_, event, arg1)
         for _, e in ipairs({ "UNIT_HEALTH", "UNIT_HEALTH_FREQUENT", "UNIT_MAXHEALTH", "UNIT_HEAL_PREDICTION",
                             "UNIT_AURA", "UNIT_THREAT_SITUATION_UPDATE", "UNIT_CONNECTION", "UNIT_NAME_UPDATE",
                             "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
-                            "SPELLS_CHANGED", "UNIT_FLAGS" }) do
+                            "SPELLS_CHANGED", "UNIT_FLAGS", "PLAYER_REGEN_DISABLED" }) do
             reg(e)
         end
         C_Timer.After(1, updateAll)
         msg("nacteno - napis /medic pro prikazy.")
         return
     end
-    if event == "PLAYER_REGEN_ENABLED" then
-        if pendingApply then M.ApplyBindings() end
+    if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" then
+        if event == "PLAYER_REGEN_ENABLED" and pendingApply then M.ApplyBindings() end
+        updateAll()   -- buff „jen mimo boj“
         return
     end
     if event == "SPELLS_CHANGED" then
