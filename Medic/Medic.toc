@@ -1,0 +1,9 @@
+## Interface: 16001, 11507
+## Title: Medic
+## Notes: Ramecky skupiny a raidu s lecenim na kliknuti mysi
+## IconTexture: Interface\Icons\Spell_Holy_FlashHeal
+## Author: salifox
+## Version: 0.1.0
+## SavedVariables: MedicDB
+
+Medic.lua
