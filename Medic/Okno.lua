@@ -446,17 +446,19 @@ createIndicatorsPage = function(page)
     local x = 18
     heading(x, -50, "Buffy")
     check(x, -74, "Hlídat chybějící buff", function() return MedicDB.buffs end, function(v) MedicDB.buffs = v end)
-    check(x, -100, "Jen mimo boj", function() return MedicDB.buffOOC end, function(v) MedicDB.buffOOC = v end)
-    check(x, -126, "Jen buff ode mě", function()
+    check(x, -100, "Ikonka = buff chybí", function() return MedicDB.buffMode ~= "present" end, function() MedicDB.buffMode = "missing" end)
+    check(x, -126, "Ikonka = buff má (zmizí, když spadne)", function() return MedicDB.buffMode == "present" end, function() MedicDB.buffMode = "present" end)
+    check(x, -152, "Jen mimo boj", function() return MedicDB.buffOOC end, function(v) MedicDB.buffOOC = v end)
+    check(x, -178, "Jen buff ode mě", function()
         local c = M.BuffConfig()
         return c and c.mine
     end, function(v) MedicDB.buffMine[M.Class] = v end)
     local lbl = text(page, fontNormal)
-    lbl:SetPoint("TOPLEFT", x + 4, -158)
+    lbl:SetPoint("TOPLEFT", x + 4, -210)
     lbl:SetText("Hlídané buffy:")
     local eb = CreateFrame("EditBox", nil, page, "InputBoxTemplate")
     eb:SetSize(205, 22)
-    eb:SetPoint("TOPLEFT", x + 8, -176)
+    eb:SetPoint("TOPLEFT", x + 8, -228)
     eb:SetAutoFocus(false)
     local function saveBuffs()
         MedicDB.buffNames[M.Class] = eb:GetText()
@@ -466,7 +468,7 @@ createIndicatorsPage = function(page)
     eb:SetScript("OnEnterPressed", function(self) saveBuffs(); self:ClearFocus() end)
     eb:SetScript("OnEditFocusLost", saveBuffs)
     eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    local hint = note(x + 4, -202, "")
+    local hint = note(x + 4, -254, "")
     refreshers[#refreshers + 1] = function()
         if not eb:HasFocus() then eb:SetText(MedicDB.buffNames[M.Class] or "") end
         local def = M.BuffDefaultText()
@@ -491,26 +493,26 @@ createIndicatorsPage = function(page)
     note(x + 4, -158, "Když hra hodnotu aggra skrývá (tajná hodnota), aggro se neukáže.")
 
     -- Vzhled -----------------------------------------------------------------
-    heading(18, -236, "Vzhled")
-    check(18, -260, "Barva podle zdraví (jinak podle povolání)", function() return MedicDB.colorMode ~= "class" end,
+    heading(18, -296, "Vzhled")
+    check(18, -320, "Barva podle zdraví (jinak podle povolání)", function() return MedicDB.colorMode ~= "class" end,
         function(v) MedicDB.colorMode = v and "hp" or "class" end)
-    check(18, -286, "Ikony rolí (tank, healer, dps)", function() return MedicDB.roleIcons end, function(v) MedicDB.roleIcons = v end)
-    check(258, -260, "Řadit: tank vlevo, pak healer, pak dps", function() return MedicDB.sortRoles end, function(v)
+    check(18, -346, "Ikony rolí (tank, healer, dps)", function() return MedicDB.roleIcons end, function(v) MedicDB.roleIcons = v end)
+    check(258, -320, "Řadit: tank vlevo, pak healer, pak dps", function() return MedicDB.sortRoles end, function(v)
         MedicDB.sortRoles = v
         if not M.ApplySort() then M.Msg("v boji to hra nedovoli - projevi se po boji.") end
     end)
-    check(258, -286, "Ikonky mých HoTů s odpočtem", function() return MedicDB.hots end, function(v) MedicDB.hots = v end)
+    check(258, -346, "Ikonky mých HoTů s odpočtem", function() return MedicDB.hots end, function(v) MedicDB.hots = v end)
 
     -- Velikost ---------------------------------------------------------------
-    heading(18, -322, "Velikost rámečků")
+    heading(18, -382, "Velikost rámečků")
     local function stepper(x2, label, get, step, min, max, fmt, apply, dy)
         dy = dy or 0
         local l = text(page, fontNormal)
-        l:SetPoint("TOPLEFT", x2, -350 + dy)
+        l:SetPoint("TOPLEFT", x2, -410 + dy)
         l:SetText(label)
         local minus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
         minus:SetSize(26, 22)
-        minus:SetPoint("TOPLEFT", x2 + 62, -346 + dy)
+        minus:SetPoint("TOPLEFT", x2 + 62, -406 + dy)
         minus:SetText("-")
         local val = text(page, fontNormal, 1, 1, 1)
         val:SetPoint("LEFT", minus, "RIGHT", 4, 0)
@@ -548,7 +550,7 @@ end
 -------------------------------------------------------------------------------
 local function createWindow()
     local w = LEFT + #COLUMNS * (CELL_W + GAP) + 12
-    local h = TOP + #ROWS * (CELL_H + GAP) + 216
+    local h = TOP + #ROWS * (CELL_H + GAP) + 276
     win = CreateFrame("Frame", "MedicOptions", UIParent, "BackdropTemplate")
     win:SetSize(w, h)
     win:SetPoint("CENTER")

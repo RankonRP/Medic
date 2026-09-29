@@ -77,6 +77,7 @@ local DEFAULTS = {
     showSolo = true,
     buffs = true,        -- hlídat chybějící buff
     buffOOC = false,     -- ikonku buffu ukazovat jen mimo boj
+    buffMode = "missing", -- "missing" = ikonka svítí, když buff chybí; "present" = svítí, dokud ho hráč má
     buffNames = {},      -- vlastní hlídané buffy podle povolání: buffNames.PRIEST = "Power Word: Fortitude, Prayer of Fortitude"
     buffMine = {},       -- jen buff ode mě podle povolání (nil = výchozí povolání)
     debuffs = true,      -- zvýraznit debuffy, které umím odstranit
@@ -606,21 +607,29 @@ function updateButton(btn)
 
     -- chybějící buff (když jsou názvy aur tajné, stav se nemění)
     local cfg = MedicDB.buffs and M.BuffConfig()
-    local missing, unknown = false, false
+    local missing, unknown, haveIcon = false, false, nil
     if MedicDB.buffOOC and InCombatLockdown() then cfg = nil end
     if cfg and not dead and not offline and (cfg.custom or knowsSpell(cfg.spell)) then
         missing = true
-        forEachAura(unit, "HELPFUL", function(name, _, _, source)
+        forEachAura(unit, "HELPFUL", function(name, icon, _, source)
             if secret(name) or secret(source) then unknown = true return true end
             if not name then return end
             if cfg.mine and source ~= "player" then return end
             for _, want in ipairs(cfg.names) do
-                if (cfg.prefix and name:sub(1, #want) == want) or name == want then missing = false return true end
+                if (cfg.prefix and name:sub(1, #want) == want) or name == want then missing, haveIcon = false, icon return true end
             end
         end)
     end
     if unknown then
         -- nechat, jak bylo
+    elseif MedicDB.buffMode == "present" then
+        -- ikonka svítí, dokud buff má (a zmizí, když spadne)
+        if cfg and haveIcon then
+            btn.buffIcon:SetTexture(haveIcon)
+            btn.buffIcon:Show()
+        else
+            btn.buffIcon:Hide()
+        end
     elseif missing then
         btn.buffIcon:SetTexture(spellIcon(cfg.spell) or "Interface\\Icons\\INV_Misc_QuestionMark")
         btn.buffIcon:Show()
