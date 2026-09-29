@@ -536,7 +536,11 @@ createIndicatorsPage = function(page)
     stepper(422, "Měřítko", function() return MedicDB.scale end, 0.1, 0.5, 2, "%.1f",
         function(v) return M.SetLayout(MedicDB.width, MedicDB.height, v) end)
     stepper(22, "HoTy", function() return MedicDB.hotSize or 15 end, 1, 8, 30, "%d",
-        function(v) M.SetHotSize(v) return true end, -30)
+        function(v) M.SetIconSize("hotSize", v) return true end, -30)
+    stepper(222, "Buff", function() return MedicDB.buffSize or 12 end, 1, 8, 30, "%d",
+        function(v) M.SetIconSize("buffSize", v) return true end, -30)
+    stepper(422, "Debuff", function() return MedicDB.debuffSize or 14 end, 1, 8, 30, "%d",
+        function(v) M.SetIconSize("debuffSize", v) return true end, -30)
 end
 
 -------------------------------------------------------------------------------

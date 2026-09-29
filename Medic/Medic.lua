@@ -90,6 +90,8 @@ local DEFAULTS = {
     sortRoles = true,    -- řadit tank -> healer -> dps zleva doprava
     hots = true,         -- ikonky mých HoTů s odpočtem
     hotSize = 15,        -- velikost ikonek HoTů
+    buffSize = 12,       -- velikost ikonky chybějícího buffu
+    debuffSize = 14,     -- velikost ikonky debuffu
 }
 
 -- HoTy a štíty, které se ukazují v rámečku (když hra názvy aur neskrývá; jinak všechny krátké moje buffy)
@@ -321,7 +323,6 @@ local function styleButton(btn)
         f:Hide()
         btn.hotIcons[i] = f
     end
-    M.LayoutHots(btn)
 
     local debuffIcon = overlay:CreateTexture(nil, "OVERLAY")
     debuffIcon:SetSize(14, 14)
@@ -335,6 +336,7 @@ local function styleButton(btn)
     buff:SetPoint("TOPRIGHT", -2, -2)
     buff:Hide()
     btn.buffIcon = buff
+    M.LayoutHots(btn)   -- velikosti ikonek z nastavení
 
     wrapKeys(btn)
     btn:HookScript("OnAttributeChanged", function(self, attr)
@@ -428,6 +430,8 @@ end
 
 -- Ikonky mých HoTů s odpočtem (velikost z nastavení; nejsou chráněné, jde měnit i v boji)
 function M.LayoutHots(btn)
+    if btn.buffIcon then btn.buffIcon:SetSize(MedicDB.buffSize or 12, MedicDB.buffSize or 12) end
+    if btn.debuffIcon then btn.debuffIcon:SetSize(MedicDB.debuffSize or 14, MedicDB.debuffSize or 14) end
     local s = MedicDB.hotSize or 15
     for i, f in ipairs(btn.hotIcons) do
         f:SetSize(s, s)
@@ -436,8 +440,9 @@ function M.LayoutHots(btn)
         f.time:SetFont(FONT, math.max(8, math.floor(s * 0.6)), "OUTLINE")
     end
 end
-function M.SetHotSize(s)
-    MedicDB.hotSize = s
+-- velikost ikonek: what = "hotSize" / "buffSize" / "debuffSize"
+function M.SetIconSize(what, s)
+    MedicDB[what] = s
     for _, btn in ipairs(buttons) do M.LayoutHots(btn) end
 end
 
