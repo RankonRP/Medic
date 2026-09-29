@@ -21,6 +21,20 @@ local fontButtonHl = CreateFont("MedicFontButtonHighlight")
 fontButtonHl:SetFont(FONT, 12, "")
 fontButtonHl:SetTextColor(1, 1, 1)
 
+-- Vlastní popisek s českým písmem (herní popisek neumí č/ř/ů a měnit ho pro celou hru nechceme)
+local tip = CreateFrame("GameTooltip", "MedicTooltip", UIParent, "GameTooltipTemplate")
+local function showTip(owner, anchorPoint, lines)
+    tip:SetOwner(owner, anchorPoint)
+    tip:ClearLines()
+    for _, l in ipairs(lines) do tip:AddLine(l[1], l[2] or 1, l[3] or 1, l[4] or 1) end
+    for i = 1, tip:NumLines() do
+        local fs = _G["MedicTooltipTextLeft" .. i]
+        if fs then fs:SetFont(FONT, i == 1 and 14 or 12, "") end
+    end
+    tip:Show()
+end
+local function hideTip() tip:Hide() end
+
 local function czechButton(b)
     b:SetNormalFontObject(fontButton)
     b:SetHighlightFontObject(fontButtonHl)
@@ -222,17 +236,17 @@ local function createCell(parent, key)
         openChooser(self.key, self)
     end)
     cell:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         local action = M.GetBinds()[self.key]
-        GameTooltip:AddLine(M.KeyLabel(self.key), 1, 1, 1)
-        GameTooltip:AddLine(action and actionLabel(action) or "nic", 1, 0.82, 0)
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("Pretahni sem kouzlo ze spellbooku.", 0.7, 0.7, 0.7)
-        GameTooltip:AddLine("Leve tlacitko: dalsi moznosti", 0.7, 0.7, 0.7)
-        GameTooltip:AddLine("Prave tlacitko: smazat", 0.7, 0.7, 0.7)
-        GameTooltip:Show()
+        showTip(self, "ANCHOR_RIGHT", {
+            { self.label },
+            { action and actionLabel(action) or "nic", 1, 0.82, 0 },
+            { " " },
+            { "Přetáhni sem kouzlo ze spellbooku.", 0.7, 0.7, 0.7 },
+            { "Levé tlačítko: další možnosti", 0.7, 0.7, 0.7 },
+            { "Pravé tlačítko: smazat", 0.7, 0.7, 0.7 },
+        })
     end)
-    cell:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    cell:SetScript("OnLeave", hideTip)
     return cell
 end
 
@@ -308,6 +322,7 @@ local function createWindow()
         for c, col in ipairs(COLUMNS) do
             local key = row.mod .. col.btn
             local cell = createCell(win, key)
+            cell.label = (row.mod == "" and "" or (row.label .. " + ")) .. col.label .. " tlačítko"
             cell:SetPoint("TOPLEFT", LEFT + (c - 1) * (CELL_W + GAP), -TOP - (r - 1) * (CELL_H + GAP))
             cells[key] = cell
         end
@@ -406,14 +421,14 @@ local function createMinimapButton()
     minimapButton:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
     -- tooltip bez diakritiky (písmo tooltipu ji neumí)
     minimapButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:AddLine("Medic")
-        GameTooltip:AddLine("Levy klik: nastaveni kouzel", 1, 1, 1)
-        GameTooltip:AddLine("Pravy klik: ramecky zamknout / odemknout", 1, 1, 1)
-        GameTooltip:AddLine("Tazenim posunes ikonu", 0.7, 0.7, 0.7)
-        GameTooltip:Show()
+        showTip(self, "ANCHOR_LEFT", {
+            { "Medic", 0.4, 1, 0.6 },
+            { "Levý klik: nastavení kouzel" },
+            { "Pravý klik: rámečky zamknout / odemknout" },
+            { "Tažením posuneš ikonu", 0.7, 0.7, 0.7 },
+        })
     end)
-    minimapButton:SetScript("OnLeave", GameTooltip_Hide)
+    minimapButton:SetScript("OnLeave", hideTip)
     placeMinimapButton()
 end
 

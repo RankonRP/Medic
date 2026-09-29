@@ -6,6 +6,7 @@
 
 local ADDON = ...
 local M = {}
+local FONT = "Interface\\AddOns\\Medic\\Fonts\\cz.ttf"   -- herní písmo neumí č/ř/ů
 _G.Medic = M
 
 -------------------------------------------------------------------------------
@@ -220,12 +221,16 @@ local function styleButton(btn)
     local name = overlay:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     name:SetPoint("TOPLEFT", 4, -4)
     name:SetPoint("TOPRIGHT", -14, -4)
+    name:SetFont(FONT, 11, "")
+    name:SetShadowOffset(1, -1)
     name:SetJustifyH("LEFT")
     name:SetWordWrap(false)
     btn.nameText = name
 
     local info = overlay:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     info:SetPoint("BOTTOMRIGHT", -4, 4)
+    info:SetFont(FONT, 10, "")
+    info:SetShadowOffset(1, -1)
     info:SetJustifyH("RIGHT")
     btn.infoText = info
 
@@ -316,7 +321,7 @@ function updateButton(btn)
         btn.infoText:SetTextColor(0.6, 0.6, 0.6)
     elseif dead then
         btn.hp:SetValue(0)
-        btn.infoText:SetText("Mrtvy")
+        btn.infoText:SetText("Mrtvý")
         btn.infoText:SetTextColor(0.8, 0.3, 0.3)
     else
         btn.hp:SetStatusBarColor(c.r, c.g, c.b)
@@ -497,7 +502,8 @@ local function createFrames()
     t:SetColorTexture(0.1, 0.5, 0.3, 0.8)
     local label = handle:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     label:SetPoint("CENTER")
-    label:SetText("Medic - tahni")
+    label:SetFont(FONT, 10, "")
+    label:SetText("Medic – táhni")
     handle:RegisterForDrag("LeftButton")
     handle:SetScript("OnDragStart", function()
         if InCombatLockdown() then return end
