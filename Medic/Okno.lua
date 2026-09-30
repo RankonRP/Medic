@@ -26,7 +26,7 @@ local tip = CreateFrame("GameTooltip", "MedicTooltip", UIParent, "GameTooltipTem
 local function showTip(owner, anchorPoint, lines)
     tip:SetOwner(owner, anchorPoint)
     tip:ClearLines()
-    for _, l in ipairs(lines) do tip:AddLine(l[1], l[2] or 1, l[3] or 1, l[4] or 1) end
+    for i, l in ipairs(lines) do tip:AddLine(l[1], l[2] or 1, l[3] or 1, l[4] or 1, i > 1) end   -- delší řádky zalomit
     for i = 1, tip:NumLines() do
         local fs = _G["MedicTooltipTextLeft" .. i]
         if fs then fs:SetFont(FONT, i == 1 and 14 or 12, "") end
@@ -309,7 +309,7 @@ createKeysPage = function(page)
     sub:SetPoint("TOPLEFT", 14, -40)
     sub:SetWidth(680)
     sub:SetJustifyH("LEFT")
-    sub:SetText("Najeď myší na rámeček hráče a zmáčkni klávesu – kouzlo se sešle na něj. Jinde klávesy fungují normálně.\nPřidej klávesu a pak na políčko přetáhni kouzlo ze spellbooku. Každé povolání má vlastní klávesy.")
+    sub:SetText("Najeď myší na rámeček hráče a zmáčkni klávesu (nebo otoč kolečkem) – kouzlo se sešle na něj. Jinde klávesy fungují normálně.\nPřidej klávesu a pak na políčko přetáhni kouzlo ze spellbooku. Každé povolání má vlastní klávesy.")
 
     local add = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
     add:SetSize(170, 24)
@@ -330,7 +330,7 @@ createKeysPage = function(page)
     cap:SetBackdropBorderColor(0.3, 0.8, 0.5, 1)
     local capText = text(cap, fontNormal)
     capText:SetPoint("CENTER")
-    capText:SetText("Zmáčkni klávesu (i se Shift/Ctrl/Alt)… Esc = zrušit")
+    capText:SetText("Zmáčkni klávesu nebo otoč kolečkem… Esc = zrušit")
     cap:Hide()
     cap:EnableKeyboard(true)
     cap:SetScript("OnKeyDown", function(self, key)
@@ -347,6 +347,16 @@ createKeysPage = function(page)
         refresh()
     end)
     cap:SetScript("OnMouseDown", function(self) self:Hide() end)
+    -- kolečko myši (nahoru / dolů, i s modifikátorem)
+    cap:EnableMouseWheel(true)
+    cap:SetScript("OnMouseWheel", function(self, delta)
+        self:Hide()
+        local combo = (IsAltKeyDown() and "ALT-" or "") .. (IsControlKeyDown() and "CTRL-" or "") .. (IsShiftKeyDown() and "SHIFT-" or "")
+            .. (delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN")
+        if M.GetKeys()[combo] == nil then M.SetKey(combo, false) end
+        combatNote()
+        refresh()
+    end)
     add:SetScript("OnClick", function() cap:Show() end)
     page:HookScript("OnHide", function() cap:Hide() end)
 
@@ -402,6 +412,7 @@ end
 -- Záložka „Ukazatele a velikost“: buffy, debuffy, aggro, velikost rámečků
 -------------------------------------------------------------------------------
 -- Pomůcky pro stránky s volbami (nadpis, poznámka, zaškrtávátko, − hodnota +)
+-- tip = krátká nápověda po najetí myší
 local function pageHelpers(page)
     local refreshers = {}
     page.refresh = function() for _, fn in ipairs(refreshers) do fn() end end
@@ -411,7 +422,13 @@ local function pageHelpers(page)
     bg:SetPoint("BOTTOMRIGHT", -8, 44)
     bg:SetColorTexture(1, 1, 1, 0.03)
 
-    local h = { refreshers = refreshers }
+    local function addTip(frame, title, tip)
+        if not tip then return end
+        frame:HookScript("OnEnter", function(self) showTip(self, "ANCHOR_RIGHT", { { title }, { tip, 0.8, 0.8, 0.8 } }) end)
+        frame:HookScript("OnLeave", hideTip)
+    end
+
+    local h = { refreshers = refreshers, addTip = addTip }
     function h.heading(x, y, label)
         local fs = text(page, fontTitle, 1, 0.82, 0)
         fs:SetPoint("TOPLEFT", x, y)
@@ -425,10 +442,11 @@ local function pageHelpers(page)
         fs:SetText(label)
         return fs
     end
-    function h.check(x, y, label, get, set)
+    function h.check(x, y, label, get, set, tip)
         local cb = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
         cb:SetSize(24, 24)
         cb:SetPoint("TOPLEFT", x, y)
+        cb:SetHitRectInsets(0, -212, 0, 0)   -- klikat i na text
         if cb.Text then cb.Text:SetText("") end
         local fs = text(page, fontNormal)
         fs:SetPoint("LEFT", cb, "RIGHT", 2, 0)
@@ -440,13 +458,18 @@ local function pageHelpers(page)
             M.UpdateAll()
             page.refresh()
         end)
+        addTip(cb, label, tip)
         refreshers[#refreshers + 1] = function() cb:SetChecked(get() and true or false) end
         return cb
     end
-    function h.stepper(x, y, label, get, step, min, max, fmt, apply)
-        local l = text(page, fontNormal)
-        l:SetPoint("TOPLEFT", x, y - 4)
+    function h.stepper(x, y, label, get, step, min, max, fmt, apply, tip)
+        local hit = CreateFrame("Frame", nil, page)
+        hit:SetPoint("TOPLEFT", x, y)
+        hit:SetSize(80, 22)
+        local l = text(hit, fontNormal)
+        l:SetPoint("LEFT", 0, 0)
         l:SetText(label)
+        addTip(hit, label, tip)
         local minus = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
         minus:SetSize(26, 22)
         minus:SetPoint("TOPLEFT", x + 82, y)
@@ -473,7 +496,7 @@ local function pageHelpers(page)
 end
 
 -------------------------------------------------------------------------------
--- Záložka „Ukazatele“: buffy, debuffy, aggro, cíl, mana, štíty, oživení
+-- Záložka „Ukazatele“: buffy, debuffy, aggro, cíl, mana, štíty, oživení, značky
 -------------------------------------------------------------------------------
 createIndicatorsPage = function(page)
     local h = pageHelpers(page)
@@ -482,14 +505,19 @@ createIndicatorsPage = function(page)
     -- Buffy ------------------------------------------------------------------
     local x = 18
     heading(x, -50, "Buffy")
-    check(x, -74, "Hlídat chybějící buff", function() return MedicDB.buffs end, function(v) MedicDB.buffs = v end)
-    check(x, -100, "Ikonka = buff chybí", function() return MedicDB.buffMode ~= "present" end, function() MedicDB.buffMode = "missing" end)
-    check(x, -126, "Ikonka = buff má (zmizí, když spadne)", function() return MedicDB.buffMode == "present" end, function() MedicDB.buffMode = "present" end)
-    check(x, -152, "Jen mimo boj", function() return MedicDB.buffOOC end, function(v) MedicDB.buffOOC = v end)
+    check(x, -74, "Hlídat chybějící buff", function() return MedicDB.buffs end, function(v) MedicDB.buffs = v end,
+        "Vpravo nahoře v rámečku se ukáže ikonka buffu, který hlídáš (paladin Blessing, kněz Fortitude…).")
+    check(x, -100, "Ikonka = buff chybí", function() return MedicDB.buffMode ~= "present" end, function() MedicDB.buffMode = "missing" end,
+        "Ikonka svítí u hráčů, kteří buff NEMAJÍ – hned vidíš, koho buffnout.")
+    check(x, -126, "Ikonka = buff má (zmizí, když spadne)", function() return MedicDB.buffMode == "present" end, function() MedicDB.buffMode = "present" end,
+        "Ikonka svítí u hráčů, kteří buff MAJÍ. Když buff spadne, ikonka zmizí.")
+    check(x, -152, "Jen mimo boj", function() return MedicDB.buffOOC end, function(v) MedicDB.buffOOC = v end,
+        "V boji se ikonka buffu schová, ať neruší.")
     check(x, -178, "Jen buff ode mě", function()
         local c = M.BuffConfig()
         return c and c.mine
-    end, function(v) MedicDB.buffMine[M.Class] = v end)
+    end, function(v) MedicDB.buffMine[M.Class] = v end,
+        "Počítá se jen buff, který dáváš ty. Hodí se, když ve skupině buffují dva stejní (dva paladinové).")
     local lbl = text(page, fontNormal)
     lbl:SetPoint("TOPLEFT", x + 4, -210)
     lbl:SetText("Hlídané buffy:")
@@ -505,6 +533,7 @@ createIndicatorsPage = function(page)
     eb:SetScript("OnEnterPressed", function(self) saveBuffs(); self:ClearFocus() end)
     eb:SetScript("OnEditFocusLost", saveBuffs)
     eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    h.addTip(eb, "Hlídané buffy", "Názvy buffů anglicky, oddělené čárkou (např. Mark of the Wild, Thorns). Prázdné pole = výchozí buff tvého povolání.")
     local hint = note(x + 4, -254, "")
     h.refreshers[#h.refreshers + 1] = function()
         if not eb:HasFocus() then eb:SetText(MedicDB.buffNames[M.Class] or "") end
@@ -515,32 +544,47 @@ createIndicatorsPage = function(page)
     -- Debuffy ----------------------------------------------------------------
     x = 258
     heading(x, -50, "Debuffy")
-    check(x, -74, "Zvýraznit debuffy, které umím odstranit", function() return MedicDB.debuffs end, function(v) MedicDB.debuffs = v end)
-    check(x, -110, "Ukázat ikonku debuffu", function() return MedicDB.debuffIcon end, function(v) MedicDB.debuffIcon = v end)
-    check(x, -136, "Ukazovat i ostatní debuffy", function() return MedicDB.debuffAll end, function(v) MedicDB.debuffAll = v end)
-    check(x, -162, "Blikat, když jde debuff odstranit", function() return MedicDB.debuffBlink end, function(v) MedicDB.debuffBlink = v end)
+    check(x, -74, "Zvýraznit debuffy, které umím odstranit", function() return MedicDB.debuffs end, function(v) MedicDB.debuffs = v end,
+        "Rámeček dostane barevný okraj, když má hráč jed, nemoc, kletbu nebo magii, kterou umíš sundat.")
+    check(x, -110, "Ukázat ikonku debuffu", function() return MedicDB.debuffIcon end, function(v) MedicDB.debuffIcon = v end,
+        "Vlevo dole se ukáže ikonka debuffu.")
+    check(x, -136, "Ukazovat i ostatní debuffy", function() return MedicDB.debuffAll end, function(v) MedicDB.debuffAll = v end,
+        "Ikonka i u debuffů, které odstranit neumíš (bez barevného okraje).")
+    check(x, -162, "Blikat, když jde debuff odstranit", function() return MedicDB.debuffBlink end, function(v) MedicDB.debuffBlink = v end,
+        "Celý rámeček bliká barvou debuffu – nepřehlédneš ho ani v chaosu.")
     note(x + 4, -194, "Barva rámečku podle typu: magie modrá, kletba fialová, nemoc hnědá, jed zelená. Ostatní debuffy mají jen ikonku.")
 
     -- Aggro ------------------------------------------------------------------
     x = 498
     heading(x, -50, "Aggro")
-    check(x, -74, "Ukazovat aggro", function() return MedicDB.aggro end, function(v) MedicDB.aggro = v end)
-    check(x, -100, "Proužek nahoře", function() return MedicDB.aggroStyle ~= "ramecek" end, function() MedicDB.aggroStyle = "pruh" end)
-    check(x, -126, "Celý rámeček červeně", function() return MedicDB.aggroStyle == "ramecek" end, function() MedicDB.aggroStyle = "ramecek" end)
-    check(x, -152, "Lebka: na koho útočí můj cíl", function() return MedicDB.targetOf end, function(v) MedicDB.targetOf = v end)
+    check(x, -74, "Ukazovat aggro", function() return MedicDB.aggro end, function(v) MedicDB.aggro = v end,
+        "Označí hráče, kterého nepřítel mlátí (podle hodnoty ohrožení ze hry).")
+    check(x, -100, "Proužek nahoře", function() return MedicDB.aggroStyle ~= "ramecek" end, function() MedicDB.aggroStyle = "pruh" end,
+        "Aggro jako tenký červený proužek na horním okraji rámečku.")
+    check(x, -126, "Celý rámeček červeně", function() return MedicDB.aggroStyle == "ramecek" end, function() MedicDB.aggroStyle = "ramecek" end,
+        "Aggro jako červený okraj kolem celého rámečku.")
+    check(x, -152, "Lebka: na koho útočí můj cíl", function() return MedicDB.targetOf end, function(v) MedicDB.targetOf = v end,
+        "Když máš v cíli nepřítele, u hráče, na kterého útočí, se objeví lebka. Funguje vždy.")
     note(x + 4, -184, "Aggro se neukáže, když ho hra skrývá. Lebka funguje vždy, když máš v cíli nepřítele.")
 
     -- Další ------------------------------------------------------------------
     heading(18, -300, "Další ukazatele")
-    check(18, -324, "Zvýraznit můj cíl (bílý rámeček)", function() return MedicDB.targetHighlight end, function(v) MedicDB.targetHighlight = v end)
-    check(18, -350, "Štíty (absorpce) za zdravím", function() return MedicDB.absorbs end, function(v) MedicDB.absorbs = v end)
-    check(258, -324, "Pruh many", function() return MedicDB.powerBar end, function(v) MedicDB.powerBar = v end)
-    check(258, -350, "Manu jen u healerů", function() return MedicDB.powerHealersOnly end, function(v) MedicDB.powerHealersOnly = v end)
-    check(498, -324, "Ikonka oživování u mrtvých", function() return MedicDB.rezIcon end, function(v) MedicDB.rezIcon = v end)
+    check(18, -324, "Zvýraznit můj cíl (bílý rámeček)", function() return MedicDB.targetHighlight end, function(v) MedicDB.targetHighlight = v end,
+        "Hráč, kterého máš označeného, má kolem rámečku bílý okraj.")
+    check(18, -350, "Štíty (absorpce) za zdravím", function() return MedicDB.absorbs end, function(v) MedicDB.absorbs = v end,
+        "Světlý pruh za zdravím ukazuje štíty (např. Power Word: Shield).")
+    check(258, -324, "Pruh many", function() return MedicDB.powerBar end, function(v) MedicDB.powerBar = v end,
+        "Modrý pruh many dole v rámečku (jen u postav s manou).")
+    check(258, -350, "Manu jen u healerů", function() return MedicDB.powerHealersOnly end, function(v) MedicDB.powerHealersOnly = v end,
+        "Pruh many jen u hráčů s rolí healer.")
+    check(498, -324, "Ikonka oživování u mrtvých", function() return MedicDB.rezIcon end, function(v) MedicDB.rezIcon = v end,
+        "Když mrtvého hráče někdo oživuje, uprostřed rámečku se ukáže ikonka – ať ho neoživujete dva.")
+    check(498, -350, "Značky raidu (hvězda, lebka…)", function() return MedicDB.raidMarks end, function(v) MedicDB.raidMarks = v end,
+        "Značka, kterou má hráč nastavenou (hvězda, kruh, kosočtverec, … lebka), vpravo nahoře v rámečku.")
 end
 
 -------------------------------------------------------------------------------
--- Záložka „Vzhled“: barvy, role, řazení, rozložení, velikosti
+-- Záložka „Vzhled“: barvy, role, řazení, rozložení, velikosti, profily, náhled
 -------------------------------------------------------------------------------
 createLookPage = function(page)
     local h = pageHelpers(page)
@@ -548,55 +592,87 @@ createLookPage = function(page)
 
     heading(18, -50, "Vzhled")
     check(18, -74, "Barva podle zdraví (jinak podle povolání)", function() return MedicDB.colorMode ~= "class" end,
-        function(v) MedicDB.colorMode = v and "hp" or "class" end)
-    check(18, -100, "Ikony rolí (tank, healer, dps)", function() return MedicDB.roleIcons end, function(v) MedicDB.roleIcons = v end)
+        function(v) MedicDB.colorMode = v and "hp" or "class" end,
+        "Zdraví zelené, žluté, nebo červené podle toho, kolik ho zbývá. Vypnuto = barva povolání.")
+    check(18, -100, "Ikony rolí (tank, healer, dps)", function() return MedicDB.roleIcons end, function(v) MedicDB.roleIcons = v end,
+        "Malá ikonka role vlevo nahoře (jen když má hráč roli ve skupině nastavenou).")
     check(258, -74, "Řadit: tank první, pak healer, pak dps", function() return MedicDB.sortRoles end, function(v)
         MedicDB.sortRoles = v
         if not M.ApplySort() then M.Msg("v boji to hra nedovoli - projevi se po boji.") end
-    end)
-    check(258, -100, "Ikonky mých HoTů s odpočtem", function() return MedicDB.hots end, function(v) MedicDB.hots = v end)
+    end, "Pořadí rámečků podle role. Bez nastavených rolí zůstane pořadí podle skupiny.")
+    check(258, -100, "Ikonky mých HoTů s odpočtem", function() return MedicDB.hots end, function(v) MedicDB.hots = v end,
+        "Vpravo dole ikonky tvých HoTů a štítů s odpočtem v sekundách.")
 
     heading(18, -140, "Rozložení")
-    local function grid(v)
+    local function grid()
         if not M.ApplyGrid() then M.Msg("v boji to hra nedovoli - projevi se po boji.") end
     end
     check(18, -164, "Vedle sebe (další řada pod nimi)", function() return MedicDB.orientation ~= "vertical" end,
-        function() MedicDB.orientation = "horizontal"; grid() end)
+        function() MedicDB.orientation = "horizontal"; grid() end, "Rámečky jdou zleva doprava, další řada začne pod nimi.")
     check(18, -190, "Pod sebou (další sloupec vedle)", function() return MedicDB.orientation == "vertical" end,
-        function() MedicDB.orientation = "vertical"; grid() end)
+        function() MedicDB.orientation = "vertical"; grid() end, "Rámečky jdou shora dolů, další sloupec začne vedle.")
     stepper(258, -166, "V řadě", function() return MedicDB.perRow or 5 end, 1, 1, 40, "%d",
-        function(v) MedicDB.perRow = v; return M.ApplyGrid() end)
+        function(v) MedicDB.perRow = v; return M.ApplyGrid() end, "Kolik hráčů je v jedné řadě (nebo sloupci), než začne další. Pro partu 5, pro raid třeba 5 nebo 8.")
     stepper(258, -194, "Mezera", function() return MedicDB.spacing or 2 end, 1, 0, 20, "%d",
-        function(v) MedicDB.spacing = v; return M.ApplyGrid() end)
+        function(v) MedicDB.spacing = v; return M.ApplyGrid() end, "Mezera mezi rámečky v bodech.")
     note(500, -168, "„V řadě“ = kolik hráčů je vedle sebe (nebo pod sebou), než začne další řada.", 190)
 
     heading(18, -236, "Velikost")
     stepper(18, -262, "Šířka", function() return MedicDB.width end, 5, 50, 200, "%d",
-        function(v) return M.SetLayout(v, MedicDB.height, MedicDB.scale) end)
+        function(v) return M.SetLayout(v, MedicDB.height, MedicDB.scale) end, "Šířka jednoho rámečku.")
     stepper(258, -262, "Výška", function() return MedicDB.height end, 2, 20, 80, "%d",
-        function(v) return M.SetLayout(MedicDB.width, v, MedicDB.scale) end)
+        function(v) return M.SetLayout(MedicDB.width, v, MedicDB.scale) end, "Výška jednoho rámečku.")
     stepper(498, -262, "Měřítko", function() return MedicDB.scale end, 0.1, 0.5, 2, "%.1f",
-        function(v) return M.SetLayout(MedicDB.width, MedicDB.height, v) end)
+        function(v) return M.SetLayout(MedicDB.width, MedicDB.height, v) end, "Zvětší nebo zmenší všechno najednou (rámečky, písmo, ikonky).")
     stepper(18, -292, "HoTy", function() return MedicDB.hotSize or 15 end, 1, 8, 30, "%d",
-        function(v) M.SetIconSize("hotSize", v) return true end)
+        function(v) M.SetIconSize("hotSize", v) return true end, "Velikost ikonek HoTů vpravo dole.")
     stepper(258, -292, "Buff", function() return MedicDB.buffSize or 12 end, 1, 8, 30, "%d",
-        function(v) M.SetIconSize("buffSize", v) return true end)
+        function(v) M.SetIconSize("buffSize", v) return true end, "Velikost ikonky buffu vpravo nahoře.")
     stepper(498, -292, "Debuff", function() return MedicDB.debuffSize or 14 end, 1, 8, 30, "%d",
-        function(v) M.SetIconSize("debuffSize", v) return true end)
+        function(v) M.SetIconSize("debuffSize", v) return true end, "Velikost ikonky debuffu vlevo dole.")
     stepper(18, -322, "Mana", function() return MedicDB.powerHeight or 4 end, 1, 2, 12, "%d",
-        function(v) MedicDB.powerHeight = v; return true end)
-    note(18, -350, "Šířku, výšku, měřítko a rozložení hra v boji měnit nedovolí. Ikonky a manu jde měnit kdykoli.", 660)
+        function(v) MedicDB.powerHeight = v; return true end, "Výška pruhu many.")
+    note(258, -326, "Šířku, výšku, měřítko a rozložení hra v boji měnit nedovolí.", 430)
+
+    -- Profily ----------------------------------------------------------------
+    heading(18, -358, "Parta a raid")
+    check(18, -382, "Zvlášť rozložení pro partu a raid", function() return MedicDB.useProfiles end,
+        function(v) M.SetUseProfiles(v) end,
+        "Parta a raid mají vlastní rozložení, velikost i polohu. Přepne se samo, když vstoupíš do raidu nebo z něj odejdeš.")
+    local profBtns = {}
+    for i, p in ipairs({ { "party", "Upravit partu" }, { "raid", "Upravit raid" } }) do
+        local b = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+        b:SetSize(130, 22)
+        b:SetPoint("TOPLEFT", 258 + (i - 1) * 136, -382)
+        czechButton(b)
+        b:SetText(p[2])
+        b:SetScript("OnClick", function()
+            if not M.SwitchProfile(p[1]) then M.Msg("v boji to nejde.") end
+            if p[1] == "raid" and M.PreviewCount() > 0 and M.PreviewCount() < 10 then M.Preview(MedicDB.previewSize or 40) end
+            page.refresh()
+        end)
+        h.addTip(b, p[2], "Přepne na tohle rozložení, abys ho mohl nastavit (i když zrovna nejsi v raidu). Zapni si k tomu náhled níž.")
+        profBtns[p[1]] = b
+    end
+    local profNow = text(page, fontNormal, 0.4, 1, 0.6)
+    profNow:SetPoint("TOPLEFT", 540, -386)
+    h.refreshers[#h.refreshers + 1] = function()
+        local on = MedicDB.useProfiles
+        local act = M.ActiveProfile()
+        for key, b in pairs(profBtns) do b:SetEnabled(on and act ~= key) end
+        profNow:SetText(on and ("Teď: " .. (act == "raid" and "raid" or "parta")) or "")
+    end
 
     -- Testovací režim --------------------------------------------------------
-    heading(18, -378, "Testovací režim")
-    stepper(18, -404, "Hráčů", function() return MedicDB.previewSize or 40 end, 1, 1, 40, "%d", function(v)
+    heading(18, -418, "Testovací režim")
+    stepper(18, -444, "Hráčů", function() return MedicDB.previewSize or 40 end, 1, 1, 40, "%d", function(v)
         MedicDB.previewSize = v
         if M.PreviewCount() > 0 then M.Preview(v) end
         return true
-    end)
+    end, "Kolik vymyšlených hráčů ukázat v náhledu.")
     local toggle = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
     toggle:SetSize(170, 24)
-    toggle:SetPoint("TOPLEFT", 258, -403)
+    toggle:SetPoint("TOPLEFT", 258, -443)
     czechButton(toggle)
     local function toggleText() toggle:SetText(M.PreviewCount() > 0 and "Vypnout náhled" or "Zapnout náhled") end
     toggle:SetScript("OnClick", function()
@@ -605,15 +681,84 @@ createLookPage = function(page)
         else M.Preview(MedicDB.previewSize or 40) end
         toggleText()
     end)
+    h.addTip(toggle, "Náhled", "Vymyšlená skupina jen na ukázku – změny nastavení uvidíš hned. V boji se sám vypne.")
     h.refreshers[#h.refreshers + 1] = toggleText
-    note(440, -400, "Vymyšlená skupina jen na ukázku – změny nastavení uvidíš hned. V boji se sám vypne.", 250)
+    note(440, -440, "Vymyšlená skupina jen na ukázku. V boji se sám vypne.", 250)
+end
+
+-------------------------------------------------------------------------------
+-- Export / import nastavení
+-------------------------------------------------------------------------------
+local transfer
+local function openTransfer(mode)
+    if not transfer then
+        transfer = CreateFrame("Frame", "MedicTransfer", UIParent, "BackdropTemplate")
+        transfer:SetSize(520, 300)
+        transfer:SetPoint("CENTER")
+        transfer:SetFrameStrata("DIALOG")
+        transfer:SetBackdrop(BACKDROP)
+        transfer:SetBackdropColor(0.03, 0.03, 0.03, 0.97)
+        transfer:SetBackdropBorderColor(0.3, 0.8, 0.5, 1)
+        transfer:EnableMouse(true)
+        tinsert(UISpecialFrames, "MedicTransfer")
+        transfer.title = text(transfer, fontTitle, 0.4, 1, 0.6)
+        transfer.title:SetPoint("TOPLEFT", 14, -12)
+        transfer.info = text(transfer, fontSmall, 0.8, 0.8, 0.8)
+        transfer.info:SetPoint("TOPLEFT", 14, -34)
+        transfer.info:SetWidth(490)
+        transfer.info:SetJustifyH("LEFT")
+        local sf = CreateFrame("ScrollFrame", nil, transfer, "UIPanelScrollFrameTemplate")
+        sf:SetPoint("TOPLEFT", 14, -66)
+        sf:SetPoint("BOTTOMRIGHT", -34, 48)
+        local eb = CreateFrame("EditBox", nil, sf)
+        eb:SetMultiLine(true)
+        eb:SetAutoFocus(false)
+        eb:SetFontObject(ChatFontNormal)
+        eb:SetWidth(460)
+        eb:SetScript("OnEscapePressed", function() transfer:Hide() end)
+        sf:SetScrollChild(eb)
+        transfer.eb = eb
+        local close = CreateFrame("Button", nil, transfer, "UIPanelButtonTemplate")
+        close:SetSize(110, 24)
+        close:SetPoint("BOTTOMRIGHT", -12, 12)
+        czechButton(close)
+        close:SetText("Zavřít")
+        close:SetScript("OnClick", function() transfer:Hide() end)
+        local load = CreateFrame("Button", nil, transfer, "UIPanelButtonTemplate")
+        load:SetSize(170, 24)
+        load:SetPoint("BOTTOMLEFT", 12, 12)
+        czechButton(load)
+        load:SetText("Načíst nastavení")
+        load:SetScript("OnClick", function()
+            if InCombatLockdown() then M.Msg("v boji to nejde.") return end
+            local ok, err = M.ImportText(transfer.eb:GetText())
+            if not ok then M.Msg("import se nepovedl: " .. err) return end
+            M.Msg("nastaveni nacteno - nacitam znovu rozhrani.")
+            ReloadUI()
+        end)
+        transfer.load = load
+    end
+    if mode == "export" then
+        transfer.title:SetText("Export nastavení")
+        transfer.info:SetText("Text je označený – zkopíruj ho Ctrl+C a pošli kamarádovi (nebo si ho ulož). Obsahuje kouzla všech povolání, klávesy i vzhled.")
+        transfer.eb:SetText(M.ExportText())
+        transfer.load:Hide()
+    else
+        transfer.title:SetText("Import nastavení")
+        transfer.info:SetText("Vlož text z exportu (Ctrl+V) a klikni na „Načíst nastavení“. Tvoje současné nastavení se přepíše a rozhraní se načte znovu.")
+        transfer.eb:SetText("")
+        transfer.load:Show()
+    end
+    transfer:Show()
+    transfer.eb:SetFocus()
+    transfer.eb:HighlightText()
 end
 -------------------------------------------------------------------------------
 -- Okno
 -------------------------------------------------------------------------------
 local function createWindow()
     local w = LEFT + #COLUMNS * (CELL_W + GAP) + 12
-    local h = TOP + #ROWS * (CELL_H + GAP) + 236
+    local h = TOP + #ROWS * (CELL_H + GAP) + 276
     win = CreateFrame("Frame", "MedicOptions", UIParent, "BackdropTemplate")
     win:SetSize(w, h)
     win:SetPoint("CENTER")
@@ -727,6 +872,19 @@ local function createWindow()
     end)
     win:HookScript("OnShow", lockText)
     lockText()
+
+    local exp = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+    exp:SetSize(90, 24)
+    exp:SetPoint("LEFT", lock, "RIGHT", 8, 0)
+    czechButton(exp)
+    exp:SetText("Export")
+    exp:SetScript("OnClick", function() openTransfer("export") end)
+    local imp = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+    imp:SetSize(90, 24)
+    imp:SetPoint("LEFT", exp, "RIGHT", 8, 0)
+    czechButton(imp)
+    imp:SetText("Import")
+    imp:SetScript("OnClick", function() openTransfer("import") end)
 
     local ok = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
     ok:SetSize(110, 24)

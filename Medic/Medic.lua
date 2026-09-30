@@ -100,7 +100,9 @@ local DEFAULTS = {
     absorbs = true,      -- štíty (absorpce) jako světlý pruh za zdravím
     rezIcon = true,      -- ikonka, když mrtvého někdo oživuje
     targetOf = true,     -- lebka u hráče, na kterého útočí můj nepřátelský cíl
-    orientation = "horizontal", -- "horizontal" = vedle sebe, "vertical" = pod sebou
+    raidMarks = true,    -- značky raidu (hvězda, lebka…) v rámečku
+    useProfiles = false, -- zvlášť rozložení pro partu a raid
+    profiles = {},       -- profiles.party / profiles.raid = uložené hodnoty LAYOUT_KEYS    orientation = "horizontal", -- "horizontal" = vedle sebe, "vertical" = pod sebou
     perRow = 5,          -- hráčů v jedné řadě / sloupci
     spacing = 2,         -- mezera mezi rámečky
 }
@@ -390,6 +392,13 @@ local function styleButton(btn, preview)
     skull:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcon_8")
     skull:Hide()
     btn.targetOfIcon = skull
+
+    -- značka raidu (hvězda, kruh, … lebka)
+    local mark = overlay:CreateTexture(nil, "OVERLAY")
+    mark:SetSize(13, 13)
+    mark:SetPoint("TOPRIGHT", -16, -2)
+    mark:Hide()
+    btn.raidMark = mark
 
     -- debuff, který umíš odstranit: barevný rámeček (barva podle typu – magie, jed, nemoc, kletba)
     local border = CreateFrame("Frame", nil, btn, "BackdropTemplate")
@@ -710,6 +719,14 @@ function updateButton(btn)
 
     -- cíl
     btn.targetBorder:SetShown(MedicDB.targetHighlight and flag(UnitIsUnit(unit, "target")))
+    -- značka raidu
+    local idx = MedicDB.raidMarks and GetRaidTargetIndex and GetRaidTargetIndex(unit)
+    if idx and not secret(idx) then
+        btn.raidMark:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcon_" .. idx)
+        btn.raidMark:Show()
+    else
+        btn.raidMark:Hide()
+    end
     -- na koho útočí můj nepřátelský cíl
     local targeted = MedicDB.targetOf and UnitExists("target") and flag(UnitCanAttack("player", "target"))
         and flag(UnitIsUnit(unit, "targettarget"))
@@ -1280,6 +1297,165 @@ end
 M.PreviewCount = function() return previewCount end
 
 -------------------------------------------------------------------------------
+-- Profily: zvlášť rozložení, velikost a poloha pro partu a pro raid (přepíná se samo)
+-------------------------------------------------------------------------------
+local LAYOUT_KEYS = { "width", "height", "scale", "orientation", "perRow", "spacing",
+                      "hotSize", "buffSize", "debuffSize", "powerHeight", "point" }
+local activeProfile
+
+local function copyValue(v) return type(v) == "table" and CopyTable(v) or v end
+
+function M.SaveProfile()
+    if not MedicDB.useProfiles or not activeProfile then return end
+    local p = {}
+    for _, k in ipairs(LAYOUT_KEYS) do p[k] = copyValue(MedicDB[k]) end
+    MedicDB.profiles[activeProfile] = p
+end
+
+-- použije uložené hodnoty profilu (jen mimo boj – mění velikost a polohu rámečků)
+local function applyProfileValues()
+    anchor:ClearAllPoints()
+    anchor:SetPoint(MedicDB.point[1], UIParent, MedicDB.point[1], MedicDB.point[2], MedicDB.point[3])
+    anchor:SetWidth(MedicDB.width)
+    anchor:SetScale(MedicDB.scale)
+    M.ApplyBindings()
+    M.ApplyGrid()
+    for _, btn in ipairs(buttons) do M.LayoutHots(btn) end
+    updateAll()
+    M.RefreshPreview()
+end
+
+-- which = "party" / "raid"; ruční přepnutí z okna nebo automaticky podle skupiny
+function M.SwitchProfile(which)
+    if InCombatLockdown() then M.profilePending = true return false end
+    if which == activeProfile then return true end
+    M.SaveProfile()
+    activeProfile = which
+    local p = MedicDB.profiles[which]
+    if p then for _, k in ipairs(LAYOUT_KEYS) do if p[k] ~= nil then MedicDB[k] = copyValue(p[k]) end end end
+    applyProfileValues()
+    return true
+end
+
+function M.CheckProfile()
+    if not MedicDB.useProfiles or not anchor then return end
+    M.profilePending = false
+    local want = IsInRaid() and "raid" or "party"
+    if activeProfile == nil then
+        -- první spuštění: současné nastavení patří k právě platnému profilu
+        activeProfile = want
+        if MedicDB.profiles[want] then
+            activeProfile = nil
+            M.SwitchProfile(want)
+        else
+            M.SaveProfile()
+        end
+        return
+    end
+    if want ~= activeProfile then M.SwitchProfile(want) end
+end
+
+function M.SetUseProfiles(on)
+    MedicDB.useProfiles = on
+    activeProfile = nil
+    if on then M.CheckProfile() end
+end
+M.ActiveProfile = function() return MedicDB.useProfiles and activeProfile or nil end
+
+-------------------------------------------------------------------------------
+-- Export / import nastavení jako text (poslat kamarádovi, přenést na jiný počítač)
+-------------------------------------------------------------------------------
+local SKIP_EXPORT = { minimapAngle = true, binds = true }
+
+local function encode(v)
+    local ty = type(v)
+    if ty == "string" then return ("%q"):format(v):gsub("\n", "n") end
+    if ty == "number" or ty == "boolean" then return tostring(v) end
+    if ty ~= "table" then return "nil" end
+    local parts = {}
+    for k, val in pairs(v) do
+        local key = type(k) == "string" and ("[" .. encode(k) .. "]") or ("[" .. tostring(k) .. "]")
+        parts[#parts + 1] = key .. "=" .. encode(val)
+    end
+    table.sort(parts)
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+-- vlastní čtečka (žádný loadstring – text od kamaráda se nespouští jako kód)
+local function decode(s)
+    local pos = 1
+    local function ws() pos = s:find("[^%s]", pos) or #s + 1 end
+    local value
+    local function str()
+        local out, i = {}, pos + 1
+        while i <= #s do
+            local ch = s:sub(i, i)
+            if ch == "\\" then
+                local nx = s:sub(i + 1, i + 1)
+                if nx == "n" then out[#out + 1] = "\n"
+                elseif nx:match("%d") then
+                    local num = s:match("^%d%d?%d?", i + 1)
+                    out[#out + 1] = string.char(tonumber(num)); i = i + #num - 1
+                else out[#out + 1] = nx end
+                i = i + 2
+            elseif ch == '"' then pos = i + 1 return table.concat(out)
+            else out[#out + 1] = ch; i = i + 1 end
+        end
+        error("neukonceny text")
+    end
+    function value()
+        ws()
+        local ch = s:sub(pos, pos)
+        if ch == "{" then
+            pos = pos + 1
+            local tbl = {}
+            while true do
+                ws()
+                if s:sub(pos, pos) == "}" then pos = pos + 1 return tbl end
+                if s:sub(pos, pos) ~= "[" then error("ocekavan [") end
+                pos = pos + 1
+                local k = value()
+                ws()
+                if s:sub(pos, pos + 1) ~= "]=" then error("ocekavano ]=") end
+                pos = pos + 2
+                tbl[k] = value()
+                ws()
+                if s:sub(pos, pos) == "," then pos = pos + 1 end
+            end
+        elseif ch == '"' then return str()
+        elseif s:sub(pos, pos + 3) == "true" then pos = pos + 4 return true
+        elseif s:sub(pos, pos + 4) == "false" then pos = pos + 5 return false
+        else
+            local num = s:match("^%-?%d+%.?%d*", pos)
+            if not num then error("neznamy znak na pozici " .. pos) end
+            pos = pos + #num
+            return tonumber(num)
+        end
+    end
+    return value()
+end
+
+function M.ExportText()
+    M.SaveProfile()
+    local data = {}
+    for k, v in pairs(MedicDB) do if not SKIP_EXPORT[k] then data[k] = v end end
+    return "MEDIC1:" .. encode(data)
+end
+
+-- vrací true, nebo false + důvod
+function M.ImportText(text)
+    text = (text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local body = text:match("^MEDIC1:(.+)$")
+    if not body then return false, "to neni text z Medicu (ma zacinat MEDIC1:)" end
+    local ok, data = pcall(decode, body)
+    if not ok or type(data) ~= "table" then return false, "text je poskozeny (" .. tostring(data) .. ")" end
+    for k, v in pairs(data) do
+        if DEFAULTS[k] ~= nil and type(v) == type(DEFAULTS[k]) then MedicDB[k] = v end
+    end
+    return true
+end
+
+-------------------------------------------------------------------------------
 -- Příkazy /medic
 -------------------------------------------------------------------------------
 local function printBinds()
@@ -1444,7 +1620,8 @@ ev:SetScript("OnEvent", function(_, event, arg1)
                             "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
                             "SPELLS_CHANGED", "UNIT_FLAGS", "PLAYER_REGEN_DISABLED", "PLAYER_TARGET_CHANGED",
                             "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
-                            "UNIT_ABSORB_AMOUNT_CHANGED", "INCOMING_RESURRECT_CHANGED", "UNIT_TARGET" }) do
+                            "UNIT_ABSORB_AMOUNT_CHANGED", "INCOMING_RESURRECT_CHANGED", "UNIT_TARGET",
+                            "RAID_TARGET_UPDATE", "PLAYER_LOGOUT" }) do
             reg(e)
         end
         C_Timer.After(1, updateAll)
@@ -1457,7 +1634,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
             msg("boj - nahled vypnut.")
         end
         if event == "PLAYER_REGEN_ENABLED" and pendingApply then M.ApplyBindings() end
-        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort(); M.WrapPending(); if M.gridPending then M.ApplyGrid() end end
+        if event == "PLAYER_REGEN_ENABLED" then M.ApplySort(); M.WrapPending(); if M.gridPending then M.ApplyGrid() end; M.CheckProfile() end
         updateAll()   -- buff „jen mimo boj“
         return
     end
@@ -1466,7 +1643,8 @@ ev:SetScript("OnEvent", function(_, event, arg1)
         M.ApplyBindings()
         return
     end
-    if event == "PLAYER_TARGET_CHANGED" then updateAll() return end
+    if event == "PLAYER_TARGET_CHANGED" or event == "RAID_TARGET_UPDATE" then updateAll() return end
+    if event == "PLAYER_LOGOUT" then M.SaveProfile() return end
     if event == "UNIT_TARGET" then
         if arg1 == "target" then updateAll() end   -- můj cíl přepnul na jiného hráče
         return
@@ -1479,6 +1657,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
         return
     end
     if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
+        M.CheckProfile()
         C_Timer.After(0.2, updateAll)
         return
     end

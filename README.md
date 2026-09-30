@@ -10,6 +10,8 @@ Rámečky skupiny a raidu pro WoW: Forever s léčením na kliknutí myši (podo
 - ikonky tvých HoTů s odpočtem, barva podle zdraví, blikání při debuffu
 - zvýraznění cíle, pruh many, štíty (absorpce), oživování, lebka u hráče, na kterého útočí tvůj cíl
 - rozložení vedle sebe / pod sebou, počet v řadě, mezery
+- zvlášť rozložení pro partu a raid (přepíná se samo), značky raidu
+- kouzla i na kolečko myši, export/import nastavení (poslat kamarádovi)
 - testovací režim: vymyšlená skupina 1–40 hráčů pro nastavení vzhledu (/medic test)
 - hlídání chybějícího buffu (Blessing, Fortitude, Arcane Intellect, Mark of the Wild)
 
