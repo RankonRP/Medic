@@ -148,21 +148,27 @@ end
 
 -- Projde aury jednotky (moderní i starší API)
 -- fn(name, icon, dispelName, source, aura) – aura = celá tabulka (duration, expirationTime, auraInstanceID…)
+-- Vrací true, když hra aury zablokovala: ve Forever je v boji addon číst nesmí
+-- („Auras cannot be accessed when secret“) – chyba se zachytí a aury se přeskočí.
+M.blockedFilters = {}
 local function forEachAura(unit, filter, fn)
     for i = 1, 40 do
         local name, icon, dispelName, source, aura
         if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
-            local a = C_UnitAuras.GetAuraDataByIndex(unit, i, filter)
-            if not a then return end
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
+            if not ok then M.aurasBlocked = true; M.blockedFilters[filter] = true return true end
+            if not a then return false end
             name, icon, dispelName, source, aura = a.name, a.icon, a.dispelName, a.sourceUnit, a
         else
-            local n, ic, _, dtype, dur, exp, src = UnitAura(unit, i, filter)
-            if not n then return end
+            local ok, n, ic, _, dtype, dur, exp, src = pcall(UnitAura, unit, i, filter)
+            if not ok then M.aurasBlocked = true return true end
+            if not n then return false end
             name, icon, dispelName, source = n, ic, dtype, src
             aura = { name = n, icon = ic, duration = dur, expirationTime = exp }
         end
-        if fn(name, icon, dispelName, source, aura) then return end
+        if fn(name, icon, dispelName, source, aura) then return false end
     end
+    return false
 end
 
 -- "Shift-1", "shift+1", "SHIFT-LEVE" -> "shift-1"; nil, když se to nedá přečíst
@@ -798,14 +804,14 @@ function updateButton(btn)
     if MedicDB.buffOOC and InCombatLockdown() then cfg = nil end
     if cfg and not dead and not offline and (cfg.custom or knowsSpell(cfg.spell)) then
         missing = true
-        forEachAura(unit, "HELPFUL", function(name, icon, _, source)
+        if forEachAura(unit, "HELPFUL", function(name, icon, _, source)
             if secret(name) or secret(source) then unknown = true return true end
             if not name then return end
             if cfg.mine and source ~= "player" then return end
             for _, want in ipairs(cfg.names) do
                 if (cfg.prefix and name:sub(1, #want) == want) or name == want then missing, haveIcon = false, icon return true end
             end
-        end)
+        end) then unknown = true end
     end
     if unknown then
         -- nechat, jak bylo
@@ -1511,6 +1517,9 @@ local function slash(input)
         local found
         for _, btn in ipairs(buttons) do if btn:IsVisible() and btn:IsMouseOver() then found = btn break end end
         if not found then msg("najed mysi na ramecek hrace a napis /medic ladit znovu.") return end
+        local bl = {}
+        for k in pairs(M.blockedFilters) do bl[#bl + 1] = k end
+        msg("aury: " .. (#bl > 0 and ("hra blokovala: " .. table.concat(bl, ", ")) or "zatim se cist daji"))
         msg("ramecek: " .. tostring(found:GetAttribute("unit")) .. (InCombatLockdown() and " (v boji)" or "") .. (pendingApply and " - ceka na zmeny po boji" or ""))
         for _, mod in ipairs(MODS) do
             for b = 1, 5 do
