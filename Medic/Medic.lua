@@ -843,7 +843,7 @@ M.UpdateAll = function() updateAll(); if M.RefreshPreview then M.RefreshPreview(
 local function updateUnit(unit)
     for _, btn in ipairs(buttons) do
         local u = btn:GetAttribute("unit")
-        if u and btn:IsVisible() and (u == unit or UnitIsUnit(u, unit)) then updateButton(btn) end
+        if u and btn:IsVisible() and (u == unit or flag(UnitIsUnit(u, unit))) then updateButton(btn) end
     end
 end
 
@@ -1661,7 +1661,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     if event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
         for _, btn in ipairs(buttons) do
             local u = btn:GetAttribute("unit")
-            if u and btn:IsVisible() and (u == arg1 or UnitIsUnit(u, arg1)) then M.UpdatePower(btn, u) end
+            if u and btn:IsVisible() and (u == arg1 or flag(UnitIsUnit(u, arg1))) then M.UpdatePower(btn, u) end
         end
         return
     end
